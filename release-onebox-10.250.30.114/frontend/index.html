@@ -1,0 +1,319 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="Cache-Control" content="no-store, max-age=0" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>Host Agent 管理后台</title>
+  <link rel="stylesheet" href="./styles.css?v=20260416-01" />
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <div>
+        <h1>Host Agent 管理后台</h1>
+        <p>通过管理后台统一查看宿主机、容器、镜像、制品库、任务与日志。所有操作都会先进入后端 API，再由目标宿主机上的 Host Agent 执行。</p>
+      </div>
+      <div class="hero-actions">
+        <label class="api-config">
+          <span>API 地址</span>
+          <input id="apiBaseInput" value="http://127.0.0.1:8000/api" />
+        </label>
+        <button id="saveApiBtn" class="btn btn-primary">保存地址</button>
+        <button id="healthBtn" class="btn">健康检查</button>
+      </div>
+    </header>
+
+    <section class="panel architecture-panel">
+      <div class="panel-header split">
+        <div>
+          <h2>架构总览</h2>
+          <p class="muted">当前架构：管理页面 → API Server → 任务系统 → Host Agent → 宿主机 Docker / 制品库。</p>
+        </div>
+        <div class="row-actions">
+          <button id="refreshOverviewBtn" class="btn">刷新总览</button>
+        </div>
+      </div>
+      <div id="overviewCards" class="overview-grid">
+        <article class="overview-card">
+          <span class="card-label">系统概况</span>
+          <strong>加载中...</strong>
+          <span class="muted">等待系统总览</span>
+        </article>
+      </div>
+    </section>
+
+    <section class="panel status-panel">
+      <strong>系统状态</strong>
+      <span id="statusText" aria-live="polite">正在连接后端...</span>
+    </section>
+
+    <main class="grid">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>新增宿主机</h2>
+        </div>
+        <form id="serverForm" class="form-grid">
+          <label>
+            <span>主机名称</span>
+            <input name="name" placeholder="例如：gpu-node-101" required />
+          </label>
+          <label>
+            <span>Agent ID</span>
+            <input name="agent_id" placeholder="例如：agent-10-250-30-101" required />
+          </label>
+          <label>
+            <span>主机 / IP</span>
+            <input name="host" placeholder="例如：10.250.30.101" />
+          </label>
+          <label>
+            <span>标签（逗号分隔）</span>
+            <input name="tags" placeholder="例如：preset,gpu" />
+          </label>
+          <label class="full-width">
+            <span>描述</span>
+            <textarea name="description" rows="3" placeholder="例如：预置服务器，待接入 Agent"></textarea>
+          </label>
+          <div class="full-width form-actions">
+            <button type="submit" class="btn btn-primary">创建宿主机</button>
+            <button type="button" id="refreshServersBtn" class="btn">刷新宿主机列表</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>宿主机列表</h2>
+          <span id="selectedServerText" class="muted">尚未选择宿主机</span>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>名称</th>
+                <th>主机 / IP</th>
+                <th>Agent ID</th>
+                <th>能力</th>
+                <th>状态</th>
+                <th>最近心跳</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="serversTableBody">
+              <tr><td colspan="8" class="empty">暂无宿主机</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel full-span">
+        <div class="panel-header split">
+          <div>
+            <h2>容器管理</h2>
+            <p class="muted">容器查询、启停、重启、日志查看都会通过 API 下发给选中宿主机上的 Host Agent 执行。</p>
+          </div>
+          <div class="row-actions">
+            <button id="loadContainersBtn" class="btn btn-primary">加载容器</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>容器名称</th>
+                <th>镜像名称</th>
+                <th>状态</th>
+                <th>端口</th>
+                <th>运行时长</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="containersTableBody">
+              <tr><td colspan="6" class="empty">请先选择宿主机并加载容器</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel full-span">
+        <div class="panel-header split">
+          <div>
+            <h2>镜像列表</h2>
+            <p class="muted">通过 Host Agent 获取当前宿主机上的 Docker 镜像，可快速导出到制品库。</p>
+          </div>
+          <div class="row-actions">
+            <button id="loadImagesBtn" class="btn btn-primary">加载镜像</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>仓库</th>
+                <th>标签</th>
+                <th>镜像 ID</th>
+                <th>Digest</th>
+                <th>创建时间</th>
+                <th>大小</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="imagesTableBody">
+              <tr><td colspan="7" class="empty">请先选择宿主机并加载镜像</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel full-span">
+        <div class="panel-header split">
+          <div>
+            <h2>制品库</h2>
+            <p class="muted">当前项目里，管理的镜像就是制品库。镜像包、编排部署包等统一存放在制品库目录中。</p>
+          </div>
+          <div class="row-actions">
+            <button id="refreshArtifactsBtn" class="btn">刷新制品</button>
+          </div>
+        </div>
+
+        <form id="artifactUploadForm" class="subgrid compact-grid">
+          <label>
+            <span>选择文件</span>
+            <input id="artifactFileInput" type="file" required />
+          </label>
+          <label>
+            <span>制品类型</span>
+            <select id="artifactKindSelect">
+              <option value="docker-image">镜像包</option>
+              <option value="compose-bundle">编排部署包</option>
+              <option value="generic">通用制品</option>
+            </select>
+          </label>
+          <div class="form-actions align-end">
+            <button type="submit" class="btn btn-primary">上传到制品库</button>
+          </div>
+        </form>
+
+        <div class="table-wrap mt-16">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>文件名</th>
+                <th>类型</th>
+                <th>大小</th>
+                <th>来源</th>
+                <th>创建时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="artifactsTableBody">
+              <tr><td colspan="7" class="empty">暂无制品</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel full-span">
+        <div class="panel-header split">
+          <div>
+            <h2>导出 / 导入 / 部署</h2>
+            <p class="muted">当前选中的宿主机：<span id="selectedHostOperationText">未选择</span></p>
+          </div>
+        </div>
+
+        <div class="subgrid operation-grid">
+          <form id="exportImageForm" class="panel panel-nested">
+            <div class="panel-header">
+              <h3>导出镜像</h3>
+            </div>
+            <label>
+              <span>镜像名称</span>
+              <input id="exportImageRefInput" placeholder="例如：nginx:latest" required />
+            </label>
+            <label>
+              <span>导出文件名（可选）</span>
+              <input id="exportArtifactNameInput" placeholder="例如：nginx_latest.tar" />
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">导出到制品库</button>
+            </div>
+          </form>
+
+          <section class="panel panel-nested">
+            <div class="panel-header">
+              <h3>编排部署参数</h3>
+            </div>
+            <div class="subgrid compact-grid">
+              <label>
+                <span>项目名（可选）</span>
+                <input id="composeProjectInput" placeholder="例如：demo-app" />
+              </label>
+              <label>
+                <span>编排文件</span>
+                <input id="composeFileInput" value="docker-compose.yml" />
+              </label>
+              <label class="full-width">
+                <span>工作目录（可选）</span>
+                <input id="composeWorkdirInput" placeholder="例如：deploy 或 packages/app" />
+              </label>
+            </div>
+            <p class="muted">在上方制品库列表中，点击“导入到当前主机”或“部署到当前主机”即可执行对应动作。</p>
+          </section>
+        </div>
+      </section>
+
+      <section class="panel full-span">
+        <div class="panel-header split">
+          <div>
+            <h2>最近任务</h2>
+            <p class="muted">任务状态来自后端任务系统，可用于审计容器操作、镜像导入导出与部署记录。</p>
+          </div>
+          <div class="row-actions">
+            <button id="refreshTasksBtn" class="btn">刷新任务</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>宿主机</th>
+                <th>任务类型</th>
+                <th>状态</th>
+                <th>创建时间</th>
+                <th>完成时间</th>
+                <th>摘要</th>
+              </tr>
+            </thead>
+            <tbody id="recentTasksTableBody">
+              <tr><td colspan="7" class="empty">暂无任务</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel full-span">
+        <div class="panel-header split">
+          <div>
+            <h2>容器日志</h2>
+            <p class="muted">点击容器操作中的“日志”可查看目标容器最新日志。</p>
+          </div>
+          <div class="row-actions">
+            <label>
+              <span class="small-label">日志行数</span>
+              <input id="tailInput" type="number" value="200" min="1" max="2000" />
+            </label>
+          </div>
+        </div>
+        <pre id="logsOutput" class="logs">等待加载日志...</pre>
+      </section>
+    </main>
+  </div>
+
+  <script type="module" src="./app.js?v=20260416-01"></script>
+</body>
+</html>

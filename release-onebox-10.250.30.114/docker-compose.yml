@@ -1,0 +1,25 @@
+services:
+  onebox:
+    build:
+      context: .
+      dockerfile: ./deploy/onebox/Dockerfile
+    container_name: host-agent-onebox
+    environment:
+      BACKEND_PORT: 8000
+      FRONTEND_PORT: 14173
+      API_BASE_URL: http://127.0.0.1:8000/api
+      AGENT_ID: onebox-agent-10-250-30-114
+      AGENT_NAME: onebox-agent-10-250-30-114
+      HOST_ADDRESS: 10.250.30.114
+      DATA_DIR: /data
+      ARTIFACT_DIR: /mnt/dockerContainerSave/image
+      DOCKER_TASK_TIMEOUT_SECONDS: 120
+      ARTIFACT_HOST_DIR: /mnt/dockerContainerSave/image
+    ports:
+      - "18000:8000"
+      - "14173:14173"
+    volumes:
+      - ./backend/data:/data
+      - /mnt/dockerContainerSave/image:/mnt/dockerContainerSave/image
+      - /var/run/docker.sock:/var/run/docker.sock
+    restart: unless-stopped
