@@ -14,7 +14,9 @@ from app.schemas.server import ConnectionTestResponse, Server, ServerCreate, Ser
 
 class ServerService:
     HEARTBEAT_TIMEOUT_SECONDS = settings.heartbeat_timeout_seconds
-    LEGACY_TEXT_REPLACEMENTS: Dict[str, str] = {}
+    LEGACY_TEXT_REPLACEMENTS: Dict[str, str] = {
+        "????????? Agent": "\u9884\u7f6e\u670d\u52a1\u5668\uff0c\u5f85\u63a5\u5165 Agent",
+    }
     PRESET_SERVERS: List[Dict[str, Any]] = [
         {
             "name": f"10.250.30.{suffix}",
@@ -92,10 +94,18 @@ class ServerService:
         save_json(settings.server_state_file, [self._serialize_record(record) for record in self._server_records])
 
     def _ensure_preset_servers(self) -> None:
-        existing_agent_ids = {str(record.get("agent_id") or "") for record in self._server_records}
+        records_by_agent_id = {str(record.get("agent_id") or ""): record for record in self._server_records}
         for preset in self.PRESET_SERVERS:
-            if preset["agent_id"] in existing_agent_ids:
+            existing = records_by_agent_id.get(preset["agent_id"])
+            if existing is not None:
+                existing["name"] = preset["name"]
+                existing["host"] = preset["host"]
+                existing["description"] = preset["description"]
+                existing["tags"] = list(preset.get("tags", []))
+                existing.setdefault("management_ip", preset["host"])
+                existing.setdefault("host_ip", preset["host"])
                 continue
+
             record = {
                 **preset,
                 "id": self._next_id,
@@ -115,7 +125,7 @@ class ServerService:
                 "memory_used_bytes": None,
             }
             self._server_records.append(record)
-            existing_agent_ids.add(preset["agent_id"])
+            records_by_agent_id[preset["agent_id"]] = record
             self._next_id += 1
 
     @staticmethod
