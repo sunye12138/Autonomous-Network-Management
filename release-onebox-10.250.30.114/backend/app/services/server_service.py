@@ -71,6 +71,7 @@ class ServerService:
         restored.setdefault("management_ip", None)
         restored.setdefault("host_ip", None)
         restored.setdefault("reported_user", None)
+        restored.setdefault("owner_user", None)
         restored.setdefault("os_name", None)
         restored.setdefault("runtime", None)
         restored.setdefault("cpu_percent", None)
@@ -206,6 +207,7 @@ class ServerService:
             management_ip=record.get("management_ip"),
             host_ip=record.get("host_ip"),
             reported_user=record.get("reported_user"),
+            owner_user=record.get("owner_user"),
             os_name=record.get("os_name"),
             runtime=record.get("runtime"),
             cpu_percent=record.get("cpu_percent"),
@@ -226,6 +228,7 @@ class ServerService:
         management_ip: Optional[str] = None,
         host_ip: Optional[str] = None,
         reported_user: Optional[str] = None,
+        owner_user: Optional[str] = None,
         os_name: Optional[str] = None,
         runtime: Optional[str] = None,
         cpu_percent: Optional[float] = None,
@@ -249,6 +252,7 @@ class ServerService:
             "management_ip": management_ip,
             "host_ip": host_ip,
             "reported_user": reported_user,
+            "owner_user": owner_user,
             "os_name": os_name,
             "runtime": runtime,
             "cpu_percent": cpu_percent,
@@ -269,6 +273,7 @@ class ServerService:
         management_ip: Optional[str] = None,
         host_ip: Optional[str] = None,
         reported_user: Optional[str] = None,
+        owner_user: Optional[str] = None,
         os_name: Optional[str] = None,
         runtime: Optional[str] = None,
         cpu_percent: Optional[float] = None,
@@ -288,6 +293,7 @@ class ServerService:
                 management_ip=management_ip,
                 host_ip=host_ip,
                 reported_user=reported_user,
+                owner_user=owner_user,
                 os_name=os_name,
                 runtime=runtime,
                 cpu_percent=cpu_percent,
@@ -314,6 +320,8 @@ class ServerService:
             record["host_ip"] = host_ip
         if reported_user is not None:
             record["reported_user"] = reported_user
+        if owner_user is not None:
+            record["owner_user"] = owner_user
         if os_name is not None:
             record["os_name"] = os_name
         if runtime is not None:
@@ -369,6 +377,7 @@ class ServerService:
             record["management_ip"] = None
             record["host_ip"] = None
             record["reported_user"] = None
+            record["owner_user"] = None
             record["os_name"] = None
             record["runtime"] = None
             record["cpu_percent"] = None
@@ -416,6 +425,7 @@ class ServerService:
                 management_ip=payload.management_ip,
                 host_ip=payload.host_ip,
                 reported_user=payload.reported_user,
+                owner_user=None,
                 os_name=payload.os_name,
                 runtime=payload.runtime,
                 cpu_percent=payload.cpu_percent,
@@ -437,6 +447,7 @@ class ServerService:
                 management_ip=payload.management_ip,
                 host_ip=payload.host_ip,
                 reported_user=payload.reported_user,
+                owner_user=None,
                 os_name=payload.os_name,
                 runtime=payload.runtime,
                 cpu_percent=payload.cpu_percent,

@@ -627,3 +627,66 @@ body {
     border-radius: 10px;
     padding: 2px 8px;
 }
+
+
+.status-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.location-badge {
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+
+.server-card.is-selected {
+    border-color: #93c5fd;
+    box-shadow: 0 10px 24px rgba(37, 99, 235, 0.12);
+}
+
+.status-group {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.location-badge {
+    max-width: 340px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.current-env-badge {
+    background: #dbeafe;
+    color: #1d4ed8;
+}
+
+.owner-metric {
+    min-width: 220px;
+}
+
+.owner-input {
+    border: 1px solid #cbd5e1;
+    border-radius: 12px;
+    padding: 10px 12px;
+    font-size: 0.9rem;
+    outline: none;
+    background: #fff;
+}
+
+.owner-input:focus {
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+}
+
+
+.docker-server-field {
+    max-width: 320px;
+}

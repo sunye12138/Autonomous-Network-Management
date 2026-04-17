@@ -18,6 +18,7 @@ class ServerBase(BaseModel):
     agent_id: str = Field(..., min_length=1, max_length=100, description="Bound host agent ID")
     host: Optional[str] = Field(default=None, max_length=255, description="Host/IP or remark")
     description: Optional[str] = Field(default=None, max_length=500, description="Remark")
+    owner_user: Optional[str] = Field(default=None, max_length=255, description="Owner filled in UI")
     tags: List[str] = Field(default_factory=list, description="Tags")
 
     @field_validator("name", "agent_id", mode="before")
@@ -25,7 +26,7 @@ class ServerBase(BaseModel):
     def _normalize_required_strings(cls, value: object) -> object:
         return normalize_required_string(value)
 
-    @field_validator("host", "description", mode="before")
+    @field_validator("host", "description", "owner_user", mode="before")
     @classmethod
     def _normalize_optional_strings(cls, value: object) -> object:
         return normalize_optional_string(value)
@@ -45,6 +46,7 @@ class ServerUpdate(BaseModel):
     agent_id: Optional[str] = Field(default=None, min_length=1, max_length=100)
     host: Optional[str] = Field(default=None, max_length=255)
     description: Optional[str] = Field(default=None, max_length=500)
+    owner_user: Optional[str] = Field(default=None, max_length=255)
     tags: Optional[List[str]] = None
 
     @field_validator("name", "agent_id", mode="before")
@@ -54,7 +56,7 @@ class ServerUpdate(BaseModel):
             return None
         return normalize_required_string(value)
 
-    @field_validator("host", "description", mode="before")
+    @field_validator("host", "description", "owner_user", mode="before")
     @classmethod
     def _normalize_optional_strings(cls, value: object) -> object:
         return normalize_optional_string(value)

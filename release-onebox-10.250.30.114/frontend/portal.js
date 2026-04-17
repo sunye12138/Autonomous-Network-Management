@@ -3,10 +3,11 @@ const viewTitle = document.getElementById('viewTitle');
 const versionBadge = document.getElementById('versionBadge');
 const sidebar = document.getElementById('sidebar');
 
-const BUILD_TAG = '\u6784\u5efa 20260414-114';
+const BUILD_TAG = '\u6784\u5efa 20260417-04';
 const API_KEY = 'customer-portal-api-base';
 const SERVER_KEY = 'customer-portal-selected-server';
 const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
+const OFFLINE_PING_INTERVAL_MS = 60000;
 
 const state = {
     currentView: 'home',
@@ -29,6 +30,9 @@ const state = {
     selectedServerId: null,
     selectedServerName: '',
     lastError: '',
+    pingStatusByServerId: {},
+    offlinePingTimerId: null,
+    pingSweepRunning: false,
 };
 
 const viewMeta = {
@@ -229,6 +233,18 @@ function restoreSelectedServer() {
     }
 }
 
+async function saveOwnerUser(serverId, value) {
+    const normalized = String(value || '').trim();
+    await request(`/servers/${serverId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ owner_user: normalized || null }),
+    });
+}
+
+function getOwnerUser(server) {
+    return String(server.ownerUser || '').trim();
+}
+
 function chooseServer(serverId) {
     const matched = state.servers.find((item) => Number(item.id) === Number(serverId));
     if (!matched) return false;
@@ -264,7 +280,8 @@ async function loadServers() {
             memoryTotalBytes,
             memoryUsedBytes,
             location: server.description || (server.tags?.[0] || '-'),
-            reportedUser: server.reported_user || server.agent_id || '-',
+            reportedUser: server.owner_user || server.reported_user || '-',
+            ownerUser: server.owner_user || '',
             osName: server.os_name || '-',
             runtime: server.runtime || server.agent_version || '-',
             lastSeenAt: server.last_seen_at,
@@ -274,6 +291,7 @@ async function loadServers() {
         state.selectedServerId = null;
         state.selectedServerName = '';
     }
+    cleanupPingStateCache();
     ensureSelectedServer();
 }
 
@@ -349,6 +367,143 @@ function setHeader(view) {
     versionBadge.innerText = `${meta.badge} \u00b7 ${BUILD_TAG}`;
 }
 
+function pingCacheKey(serverId) {
+    return String(serverId);
+}
+
+function getPingStatus(serverId) {
+    return state.pingStatusByServerId[pingCacheKey(serverId)] || null;
+}
+
+function setPingStatus(serverId, payload) {
+    const key = pingCacheKey(serverId);
+    state.pingStatusByServerId[key] = { ...(state.pingStatusByServerId[key] || {}), ...payload };
+}
+
+function cleanupPingStateCache() {
+    const validIds = new Set(state.servers.map((item) => pingCacheKey(item.id)));
+    Object.keys(state.pingStatusByServerId).forEach((key) => {
+        const server = state.servers.find((item) => pingCacheKey(item.id) === key);
+        if (!validIds.has(key) || (server && server.status === 'online')) {
+            delete state.pingStatusByServerId[key];
+        }
+    });
+}
+
+function stopOfflinePingLoop() {
+    if (state.offlinePingTimerId) {
+        window.clearInterval(state.offlinePingTimerId);
+        state.offlinePingTimerId = null;
+    }
+}
+
+async function pingOfflineServers(options = {}) {
+    const { renderAfterEach = false } = options;
+    if (state.pingSweepRunning) return;
+
+    const offlineServers = state.servers.filter((item) => item.status !== 'online');
+    if (!offlineServers.length) {
+        cleanupPingStateCache();
+        if (state.currentView === 'servers') renderServersView();
+        return;
+    }
+
+    state.pingSweepRunning = true;
+    offlineServers.forEach((server) => {
+        setPingStatus(server.id, {
+            state: 'checking',
+            message: '\u6b63\u5728\u68c0\u6d4b\u7f51\u7edc\u8fde\u901a\u6027',
+            checkedAt: new Date().toISOString(),
+            latencyMs: null,
+        });
+    });
+
+    if (state.currentView === 'servers') renderServersView();
+
+    for (const server of offlineServers) {
+        try {
+            const data = await request(`/servers/${server.id}/ping`, { method: 'POST', timeoutMs: 10000 });
+            setPingStatus(server.id, {
+                state: data.success ? 'success' : 'failed',
+                message: data.message || '',
+                checkedAt: data.checked_at || new Date().toISOString(),
+                latencyMs: data.latency_ms ?? null,
+            });
+        } catch (error) {
+            setPingStatus(server.id, {
+                state: 'failed',
+                message: error?.message || '\u0050\u0069\u006e\u0067 \u68c0\u6d4b\u5931\u8d25',
+                checkedAt: new Date().toISOString(),
+                latencyMs: null,
+            });
+        }
+
+        if (state.currentView === 'servers' && renderAfterEach) {
+            renderServersView();
+        }
+    }
+
+    state.pingSweepRunning = false;
+    if (state.currentView === 'servers') renderServersView();
+}
+
+function startOfflinePingLoop() {
+    stopOfflinePingLoop();
+    if (state.currentView !== 'servers') return;
+    pingOfflineServers({ renderAfterEach: true });
+    state.offlinePingTimerId = window.setInterval(() => {
+        pingOfflineServers({ renderAfterEach: false });
+    }, OFFLINE_PING_INTERVAL_MS);
+}
+
+function networkStatusBadgeHtml(server) {
+    if (server.status === 'online') {
+        return '<span class="status-badge status-online">网络正常-在线</span>';
+    }
+
+    const ping = getPingStatus(server.id);
+    if (ping?.state === 'success') {
+        return '<span class="status-badge status-pending">网络正常-未接入agent</span>';
+    }
+    if (ping?.state === 'failed') {
+        return '<span class="status-badge status-offline">网络异常-离线</span>';
+    }
+    return '<span class="status-badge status-pending">网络检测中</span>';
+}
+
+
+
+
+function sanitizeDockerErrorMessage(message) {
+    const text = String(message || '').trim();
+    if (!text) return '';
+    if (text.includes('\u0048\u006f\u0073\u0074\u0020\u0041\u0067\u0065\u006e\u0074\u0020\u5f53\u524d\u79bb\u7ebf\uff0c\u65e0\u6cd5\u4e0b\u53d1\u4efb\u52a1')) return '';
+    return text;
+}
+
+function dockerServerOptionsHtml() {
+    return state.servers.map((server) => {
+        const selected = Number(server.id) === Number(state.selectedServerId) ? 'selected' : '';
+        const suffix = server.status === 'online' ? '\u5728\u7ebf' : '\u79bb\u7ebf';
+        return `<option value="${server.id}" ${selected}>${escapeHtml(server.name)} (${escapeHtml(suffix)})</option>`;
+    }).join('');
+}
+
+function networkStatusBadgeHtml(server) {
+    if (server.status === 'online') {
+        return '<span class="status-badge status-online">\u7f51\u7edc\u6b63\u5e38-\u5728\u7ebf</span>';
+    }
+
+    const ping = getPingStatus(server.id);
+    if (ping?.state === 'success') {
+        return '<span class="status-badge status-pending">\u7f51\u7edc\u6b63\u5e38-\u672a\u63a5\u5165agent</span>';
+    }
+    if (ping?.state === 'failed') {
+        return '<span class="status-badge status-offline">\u7f51\u7edc\u5f02\u5e38-\u79bb\u7ebf</span>';
+    }
+    return '<span class="status-badge status-pending">\u7f51\u7edc\u68c0\u6d4b\u4e2d</span>';
+}
+
 function renderHomeView() {
     const pendingCount = Number(state.overview.pending_tasks || 0) + Number(state.overview.running_tasks || 0);
     const onlineCpuValues = state.servers.filter((item) => item.status === 'online' && Number.isFinite(item.cpu)).map((item) => item.cpu);
@@ -365,60 +520,91 @@ function renderHomeView() {
     `;
 }
 
-async function pingServerStatus(serverId, serverName) {
-    try {
-        const data = await request(`/servers/${serverId}/ping`, { method: 'POST' });
-        alert(`${serverName}: ${data.message}`);
-    } catch (error) {
-        alert(`Ping failed: ${error.message}`);
-    }
-}
 
 function renderServersView() {
     let html = `${showErrorBanner()}<div class="server-grid">`;
     if (!state.servers.length) html += '<div class="empty-state">\u5f53\u524d\u6682\u65e0\u53ef\u7528\u670d\u52a1\u5668\u3002</div>';
     state.servers.forEach((server) => {
-        const isOnline = server.status === 'online';
         const cpuPercent = Number.isFinite(server.cpu) ? server.cpu : null;
         const memPercent = Number.isFinite(server.mem) ? server.mem : null;
         const cpuWidth = Number.isFinite(cpuPercent) ? Math.round(cpuPercent) : 0;
         const memWidth = Number.isFinite(memPercent) ? Math.round(memPercent) : 0;
-        const memoryHint = Number.isFinite(server.memoryUsedBytes) && Number.isFinite(server.memoryTotalBytes) && server.memoryTotalBytes > 0 ? `<div class="metric-subtext">${formatBytes(server.memoryUsedBytes)} / ${formatBytes(server.memoryTotalBytes)}</div>` : '';
-        const offlineHint = !isOnline && (Number.isFinite(cpuPercent) || Number.isFinite(memPercent)) ? '<div class="metric-subtext">\u79bb\u7ebf\uff0c\u663e\u793a\u6700\u8fd1\u4e00\u6b21\u4e0a\u62a5</div>' : '';
+        const memoryHint = Number.isFinite(server.memoryUsedBytes) && Number.isFinite(server.memoryTotalBytes) && server.memoryTotalBytes > 0
+            ? `<div class="metric-subtext">${formatBytes(server.memoryUsedBytes)} / ${formatBytes(server.memoryTotalBytes)}</div>`
+            : '';
+        const offlineHint = server.status !== 'online' && (Number.isFinite(cpuPercent) || Number.isFinite(memPercent))
+            ? '<div class="metric-subtext">\u79bb\u7ebf\uff0c\u663e\u793a\u6700\u8fd1\u4e00\u6b21\u4e0a\u62a5</div>'
+            : '';
+        const isSelected = Number(server.id) === Number(state.selectedServerId);
+        const networkBadge = networkStatusBadgeHtml(server);
+        const ownerValue = String(server.ownerUser || '').trim();
+
         html += `
-            <div class="server-card">
+            <div class="server-card ${isSelected ? 'is-selected' : ''}" data-server-card-id="${server.id}">
                 <div class="server-row">
                     <div class="server-info">
                         <div class="server-name">
-                            <i class="fas fa-hdd"></i> ${escapeHtml(server.name)}
-                            <span class="status-badge ${isOnline ? 'status-online' : 'status-offline'}">${isOnline ? '\u5728\u7ebf' : '\u79bb\u7ebf'}</span>
+                            <i class="fas fa-hdd"></i>
+                            <span>${escapeHtml(server.name)}</span>
                         </div>
-                        <div class="server-ip">\u7ba1\u7406 IP\uff1a${escapeHtml(server.ip)} ｜ \u4f4d\u7f6e\uff1a${escapeHtml(server.location)}<br>\u5bbf\u4e3b\u673a IP\uff1a${escapeHtml(server.hostIp)}<br>\u4f7f\u7528\u4eba\uff1a${escapeHtml(server.reportedUser)}<br>\u64cd\u4f5c\u7cfb\u7edf\uff1a${escapeHtml(server.osName)} ｜ \u8fd0\u884c\u65f6\uff1a${escapeHtml(server.runtime)}<br>\u6700\u8fd1\u5fc3\u8df3\uff1a${formatDate(server.lastSeenAt)}</div>
+                        <div class="status-group">
+                            ${networkBadge}
+                        </div>
+                        <div class="server-ip">\u7ba1\u7406 IP\uff1a${escapeHtml(server.ip)}<br>\u5bbf\u4e3b\u673a IP\uff1a${escapeHtml(server.hostIp)}<br>\u4f7f\u7528\u4eba\uff1a${escapeHtml(server.reportedUser)}<br>\u64cd\u4f5c\u7cfb\u7edf\uff1a${escapeHtml(server.osName)} \uff5c \u8fd0\u884c\u65f6\uff1a${escapeHtml(server.runtime)}<br>\u6700\u8fd1\u5fc3\u8df3\uff1a${formatDate(server.lastSeenAt)}</div>
                     </div>
                     <div class="resource-metrics">
-                        <div class="metric"><div class="metric-label">CPU \u5360\u7528</div><div class="progress-bar-bg"><div class="progress-fill" style="width: ${cpuWidth}%"></div></div><div class="metric-value">${formatPercent(cpuPercent)}</div></div>
-                        <div class="metric"><div class="metric-label">\u5185\u5b58\u5360\u7528</div><div class="progress-bar-bg"><div class="progress-fill" style="width: ${memWidth}%"></div></div><div class="metric-value">${formatPercent(memPercent)}</div>${memoryHint}${offlineHint}</div>
-                        <div class="section-actions"><button class="action-btn" data-action="select-server" data-id="${server.id}">\u8bbe\u4e3a\u5f53\u524d\u73af\u5883</button><button class="action-btn" data-action="ping-server" data-id="${server.id}" data-name="${escapeHtml(server.name)}">Ping</button></div>
+                        <div class="metric">
+                            <div class="metric-label">CPU \u5360\u7528</div>
+                            <div class="progress-bar-bg"><div class="progress-fill" style="width: ${cpuWidth}%"></div></div>
+                            <div class="metric-value">${formatPercent(cpuPercent)}</div>
+                        </div>
+                        <div class="metric">
+                            <div class="metric-label">\u5185\u5b58\u5360\u7528</div>
+                            <div class="progress-bar-bg"><div class="progress-fill" style="width: ${memWidth}%"></div></div>
+                            <div class="metric-value">${formatPercent(memPercent)}</div>
+                            ${memoryHint}
+                            ${offlineHint}
+                        </div>
+                        <label class="metric owner-metric">
+                            <span class="metric-label">\u4f7f\u7528\u4eba</span>
+                            <input class="owner-input" data-server-id="${server.id}" value="${escapeHtml(ownerValue)}" placeholder="">
+                            <span class="metric-subtext">\u4fdd\u5b58\u540e\u4f1a\u5199\u5165\u540e\u7aef\u8bb0\u5f55</span>
+                        </label>
                     </div>
                 </div>
             </div>
         `;
     });
-    html += `<div style="margin-top:20px; text-align:center; color:#6c7b94;">\u5171\u8ba1 ${state.servers.length} \u53f0\u670d\u52a1\u5668 ｜ \u5728\u7ebf ${state.overview.online_servers || 0}</div></div>`;
+    html += `<div style="margin-top:20px; text-align:center; color:#6c7b94;">\u5171\u8ba1 ${state.servers.length} \u53f0\u670d\u52a1\u5668 \uff5c \u5728\u7ebf ${state.overview.online_servers || 0}</div></div>`;
     dynamicPanel.innerHTML = html;
-    dynamicPanel.querySelectorAll('button[data-action="select-server"]').forEach((button) => {
-        button.addEventListener('click', async () => {
-            if (!chooseServer(button.dataset.id)) return;
+
+    dynamicPanel.querySelectorAll('[data-server-card-id]').forEach((card) => {
+        card.addEventListener('click', async (event) => {
+            if (event.target.closest('.owner-input')) return;
+            if (!chooseServer(card.dataset.serverCardId)) return;
             await safeLoadDockerResources({ silent: true });
             renderServersView();
         });
     });
-    dynamicPanel.querySelectorAll('button[data-action="ping-server"]').forEach((button) => {
-        button.addEventListener('click', async () => {
-            await pingServerStatus(button.dataset.id, button.dataset.name || `Server #${button.dataset.id}`);
+
+    dynamicPanel.querySelectorAll('.owner-input').forEach((input) => {
+        input.addEventListener('change', async () => {
+            const serverId = input.dataset.serverId;
+            const value = input.value;
+            try {
+                await saveOwnerUser(serverId, value);
+                const matched = state.servers.find((item) => String(item.id) === String(serverId));
+                if (matched) {
+                    matched.ownerUser = String(value || '').trim();
+                    matched.reportedUser = matched.ownerUser || '-';
+                }
+            } catch (error) {
+                alert(`\u4fdd\u5b58\u4f7f\u7528\u4eba\u5931\u8d25\uff1a${error.message}`);
+            }
         });
     });
 }
+
 
 function renderDockerView() {
     const containerRows = state.dockerRows.map((item) => `
@@ -433,19 +619,40 @@ function renderDockerView() {
             <td><button class="action-btn" data-action="export-image" data-reference="${escapeHtml(image.reference)}">\u5bfc\u51fa\u955c\u50cf</button></td>
         </tr>
     `).join('');
+
+    const serverSelector = state.servers.length
+        ? `<label class="field docker-server-field"><span>\u670d\u52a1\u5668\u9009\u62e9</span><select id="dockerServerSelect">${dockerServerOptionsHtml()}</select></label>`
+        : '<div class="info-banner">\u5f53\u524d\u6ca1\u6709\u53ef\u9009\u670d\u52a1\u5668\u3002</div>';
+
+    const containerError = sanitizeDockerErrorMessage(state.dockerErrors.containers);
+    const imageError = sanitizeDockerErrorMessage(state.dockerErrors.images);
+
     dynamicPanel.innerHTML = `
         ${showErrorBanner()}
         <div class="panel" style="margin-bottom:16px;">
-            <div class="panel-head" style="margin-bottom:16px;"><div><h2 style="font-size:1.1rem;">\u5f53\u524d\u73af\u5883\uff1a${escapeHtml(state.selectedServerName || '\u672a\u9009\u62e9')}</h2><p>\u672c\u9875\u4f1a\u540c\u65f6\u52a0\u8f7d\u5bb9\u5668\u548c\u955c\u50cf\uff1b\u5373\u4f7f\u5176\u4e2d\u4e00\u4e2a\u63a5\u53e3\u5931\u8d25\uff0c\u4e5f\u4f1a\u5355\u72ec\u5c55\u793a\u9519\u8bef\u3002</p></div><div class="section-actions"><button class="action-btn" id="refreshDockerBtn"><i class="fas fa-sync-alt"></i> \u5237\u65b0\u5bb9\u5668\u548c\u955c\u50cf</button><button class="action-btn" id="switchServerBtn"><i class="fas fa-server"></i> \u53bb\u670d\u52a1\u5668\u5217\u8868\u9009\u73af\u5883</button></div></div>
-            ${!state.selectedServerId ? '<div class="info-banner">\u8bf7\u5148\u5728\u670d\u52a1\u5668\u5217\u8868\u9009\u62e9\u5f53\u524d\u73af\u5883\u3002</div>' : ''}
+            <div class="panel-head" style="margin-bottom:16px;">
+                <div>
+                    <h2 style="font-size:1.1rem;">\u5bb9\u5668\u4e0e\u955c\u50cf\u7ba1\u7406</h2>
+                    <p>\u8bf7\u4ece\u4e0b\u62c9\u6846\u9009\u62e9\u670d\u52a1\u5668\u3002\u5bf9\u4e8e Agent \u79bb\u7ebf\u7684\u670d\u52a1\u5668\uff0c\u9875\u9762\u53ea\u663e\u793a\u72b6\u6001\uff0c\u4e0d\u518d\u989d\u5916\u5f39\u51fa\u79bb\u7ebf\u63d0\u793a\u3002</p>
+                </div>
+                <div class="section-actions">
+                    <button class="action-btn" id="refreshDockerBtn"><i class="fas fa-sync-alt"></i>\u5237\u65b0\u5bb9\u5668\u548c\u955c\u50cf</button>
+                </div>
+            </div>
+            ${serverSelector}
         </div>
         <div class="panel-stack">
-            <div class="panel docker-section"><div class="panel-head" style="margin-bottom:16px;"><div><h3>\u5bb9\u5668\u5217\u8868</h3><p class="subtle-text">\u5982\u679c\u5bb9\u5668\u4e3a\u7a7a\u4f46\u955c\u50cf\u6b63\u5e38\uff0c\u8bf4\u660e\u5f53\u524d\u4e3b\u673a\u6ca1\u6709\u5bb9\u5668\uff0c\u6216\u63a5\u53e3\u8fd4\u56de\u4e3a\u7a7a\u3002</p></div><div class="tag">${state.dockerRows.length} \u4e2a\u5bb9\u5668</div></div>${showInlineBanner(state.dockerErrors.containers)}<table class="data-table"><thead><tr><th>\u670d\u52a1\u5668\u8282\u70b9</th><th>\u5bb9\u5668\u540d\u79f0</th><th>\u955c\u50cf\u540d\u79f0</th><th>\u72b6\u6001</th><th>\u7aef\u53e3</th><th>\u8fd0\u884c\u65f6\u957f</th><th>\u64cd\u4f5c</th></tr></thead><tbody>${containerRows || '<tr><td colspan="7">\u6682\u65e0\u5bb9\u5668\u6570\u636e\u3002</td></tr>'}</tbody></table></div>
-            <div class="panel docker-section"><div class="panel-head" style="margin-bottom:16px;"><div><h3>\u955c\u50cf\u5217\u8868</h3><p class="subtle-text">\u955c\u50cf\u6570\u636e\u6765\u81ea\u63a5\u53e3 /servers/{id}/images\uff0c\u5931\u8d25\u65f6\u4f1a\u76f4\u63a5\u663e\u793a\u540e\u7aef\u8fd4\u56de\u7684\u9519\u8bef\u4fe1\u606f\u3002</p></div><div class="tag">${state.dockerImages.length} \u4e2a\u955c\u50cf</div></div>${showInlineBanner(state.dockerErrors.images)}<table class="data-table"><thead><tr><th>\u4ed3\u5e93</th><th>\u6807\u7b7e</th><th>\u955c\u50cf ID</th><th>Digest</th><th>\u521b\u5efa\u65f6\u95f4</th><th>\u5927\u5c0f</th><th>\u64cd\u4f5c</th></tr></thead><tbody>${imageRows || '<tr><td colspan="7">\u6682\u65e0\u955c\u50cf\u6570\u636e\u3002</td></tr>'}</tbody></table><div class="table-note">\u5982\u679c\u670d\u52a1\u5668\u4e0a\u4ecd\u7136\u52a0\u8f7d\u4e0d\u5230\u955c\u50cf\uff0c\u8bf7\u4f18\u5148\u68c0\u67e5\u540e\u7aef\u63a5\u53e3 <code class="inline-code">/api/servers/{id}/images</code> \u8fd4\u56de\u7ed3\u679c\u3002</div></div>
+            <div class="panel docker-section"><div class="panel-head" style="margin-bottom:16px;"><div><h3>\u5bb9\u5668\u5217\u8868</h3><p class="subtle-text">\u5982\u679c\u5bb9\u5668\u4e3a\u7a7a\u4f46\u955c\u50cf\u6b63\u5e38\uff0c\u8bf4\u660e\u5f53\u524d\u4e3b\u673a\u6ca1\u6709\u5bb9\u5668\uff0c\u6216\u63a5\u53e3\u8fd4\u56de\u4e3a\u7a7a\u3002</p></div><div class="tag">${state.dockerRows.length} \u4e2a\u5bb9\u5668</div></div>${showInlineBanner(containerError)}<table class="data-table"><thead><tr><th>\u670d\u52a1\u5668\u8282\u70b9</th><th>\u5bb9\u5668\u540d\u79f0</th><th>\u955c\u50cf\u540d\u79f0</th><th>\u72b6\u6001</th><th>\u7aef\u53e3</th><th>\u8fd0\u884c\u65f6\u957f</th><th>\u64cd\u4f5c</th></tr></thead><tbody>${containerRows || '<tr><td colspan="7">\u6682\u65e0\u5bb9\u5668\u6570\u636e\u3002</td></tr>'}</tbody></table></div>
+            <div class="panel docker-section"><div class="panel-head" style="margin-bottom:16px;"><div><h3>\u955c\u50cf\u5217\u8868</h3><p class="subtle-text">\u955c\u50cf\u6570\u636e\u6765\u81ea\u63a5\u53e3 /servers/{id}/images\u3002</p></div><div class="tag">${state.dockerImages.length} \u4e2a\u955c\u50cf</div></div>${showInlineBanner(imageError)}<table class="data-table"><thead><tr><th>\u4ed3\u5e93</th><th>\u6807\u7b7e</th><th>\u955c\u50cf ID</th><th>Digest</th><th>\u521b\u5efa\u65f6\u95f4</th><th>\u5927\u5c0f</th><th>\u64cd\u4f5c</th></tr></thead><tbody>${imageRows || '<tr><td colspan="7">\u6682\u65e0\u955c\u50cf\u6570\u636e\u3002</td></tr>'}</tbody></table></div>
         </div>
     `;
+
+    document.getElementById('dockerServerSelect')?.addEventListener('change', async (event) => {
+        if (!chooseServer(event.target.value)) return;
+        await safeLoadDockerResources({ silent: true });
+        renderDockerView();
+    });
     document.getElementById('refreshDockerBtn')?.addEventListener('click', async () => { await safeLoadDockerResources(); renderDockerView(); });
-    document.getElementById('switchServerBtn')?.addEventListener('click', () => switchView('servers'));
     dynamicPanel.querySelectorAll('button[data-action="start-container"]').forEach((button) => {
         button.addEventListener('click', async () => {
             try {
@@ -470,7 +677,7 @@ function renderDockerView() {
     });
     dynamicPanel.querySelectorAll('button[data-action="export-image"]').forEach((button) => {
         button.addEventListener('click', async () => {
-            if (!state.selectedServerId) return alert('\u8bf7\u5148\u5728\u670d\u52a1\u5668\u5217\u8868\u9009\u62e9\u5f53\u524d\u73af\u5883\u3002');
+            if (!state.selectedServerId) return alert('\u8bf7\u5148\u9009\u62e9\u5f53\u524d\u73af\u5883\u3002');
             try {
                 const result = await request(`/servers/${state.selectedServerId}/images/export`, { method: 'POST', body: JSON.stringify({ image_ref: button.dataset.reference }) });
                 await Promise.allSettled([safeLoadArtifacts({ silent: true }), safeLoadTasks({ silent: true }), safeLoadOverview({ silent: true })]);
@@ -637,7 +844,12 @@ function switchView(view) {
     state.currentView = view;
     document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.getAttribute('data-view') === view));
     setHeader(view);
-    if (view === 'servers') return renderServersView();
+    if (view !== 'servers') stopOfflinePingLoop();
+    if (view === 'servers') {
+        renderServersView();
+        startOfflinePingLoop();
+        return;
+    }
     if (view === 'docker') {
         state.lastError = '';
         renderDockerView();
