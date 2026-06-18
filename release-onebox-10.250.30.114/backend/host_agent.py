@@ -368,7 +368,7 @@ class HostAgent:
         candidate = (root / relative).resolve()
         root_resolved = root.resolve()
         if candidate != root_resolved and root_resolved not in candidate.parents:
-            return None, f"{error_label} 瓒呭嚭浜嗗厑璁哥殑鐩綍鑼冨洿"
+            return None, f"{error_label} 超出了允许的目录范围"
         return candidate, None
 
     def _list_containers(self) -> Tuple[bool, Optional[Dict[str, Any]], Optional[str]]:
@@ -486,7 +486,7 @@ class HostAgent:
             if exit_code != 0:
                 return False, None, self._combined_output(output, error) or "docker load failed"
         return True, {
-            "message": f"闀滃儚鍖?{file_name} 瀵煎叆鎴愬姛",
+            "message": f"镜像包 {file_name} 导入成功",
             "artifact_id": artifact_id,
             "output": self._combined_output(output, error),
         }, None
@@ -510,7 +510,7 @@ class HostAgent:
             try:
                 shutil.unpack_archive(str(archive_path), str(extract_dir))
             except (shutil.ReadError, ValueError) as exc:
-                return False, None, f"瑙ｅ帇閮ㄧ讲鍖呭け璐? {exc}"
+                return False, None, f"解压部署包失败：{exc}"
 
             deploy_dir, error_message = self._safe_join(extract_dir, workdir, error_label="workdir")
             if error_message:
@@ -522,7 +522,7 @@ class HostAgent:
             if error_message:
                 return False, None, error_message
             if compose_path is None or not compose_path.exists():
-                return False, None, f"Compose 鏂囦欢涓嶅瓨鍦? {compose_file}"
+                return False, None, f"Compose 文件不存在：{compose_file}"
 
             command = ["docker", "compose"]
             if project_name:
@@ -537,7 +537,7 @@ class HostAgent:
                 return False, None, self._combined_output(output, error) or "docker compose up failed"
 
         return True, {
-            "message": f"Compose 鍖?{file_name} 閮ㄧ讲鎴愬姛",
+            "message": f"Compose 包 {file_name} 部署成功",
             "artifact_id": artifact_id,
             "project_name": project_name,
             "compose_file": compose_file,

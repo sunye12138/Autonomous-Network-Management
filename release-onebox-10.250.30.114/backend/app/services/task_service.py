@@ -59,13 +59,14 @@ class TaskService:
     def _load_state(self) -> None:
         raw_records = load_json(settings.task_state_file, [])
         self._task_records = [self._deserialize_record(item) for item in raw_records if isinstance(item, dict)]
+        recovered_at = datetime.now(timezone.utc)
         for record in self._task_records:
             if record["status"] == "running":
-                record["status"] = "pending"
-                record["started_at"] = None
-                record["finished_at"] = None
+                record["status"] = "failed"
+                record["started_at"] = record.get("started_at") or record["created_at"]
+                record["finished_at"] = recovered_at
                 record["result"] = None
-                record["error"] = None
+                record["error"] = "服务重启前任务中断"
         if self._task_records:
             self._next_id = max(record["id"] for record in self._task_records) + 1
         self._persist_locked()

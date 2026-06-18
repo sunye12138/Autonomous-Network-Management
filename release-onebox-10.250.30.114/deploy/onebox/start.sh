@@ -10,6 +10,7 @@ HOST_DOCKER_BIN="${HOST_DOCKER_BIN:-}"
 INNER_DOCKER_BIN="${INNER_DOCKER_BIN:-/usr/local/bin/docker}"
 DOCKER_HOST_VALUE="${DOCKER_HOST:-}"
 ARTIFACT_HOST_DIR="${ARTIFACT_HOST_DIR:-/mnt/dockerContainerSave/image}"
+HOST_ADDRESS="${HOST_ADDRESS:-127.0.0.1}"
 EXTRA_DOCKER_ARGS=()
 
 if [[ -z "$HOST_DOCKER_BIN" ]]; then
@@ -34,6 +35,9 @@ if [[ ! -f "$ENV_FILE" ]]; then
   echo "[FATAL] Missing env file: $ENV_FILE" >&2
   exit 1
 fi
+
+env_host="$(grep -E '^HOST_ADDRESS=' "$ENV_FILE" | tail -n 1 | cut -d= -f2- | tr -d '\r' || true)"
+[[ -n "$env_host" ]] && HOST_ADDRESS="$env_host"
 
 if ! docker version >/dev/null 2>&1; then
   echo "[FATAL] Current shell cannot talk to Docker daemon. Please verify docker access first." >&2
@@ -79,7 +83,7 @@ docker run -d   --name "$CONTAINER_NAME"   --restart unless-stopped   --env-file
 
 echo
 echo "[INFO] Started $CONTAINER_NAME"
-echo "[INFO] Frontend: http://10.250.30.114:14173/"
-echo "[INFO] Health:   http://10.250.30.114:18000/api/health"
+echo "[INFO] Frontend: http://${HOST_ADDRESS}:14173/"
+echo "[INFO] Health:   http://${HOST_ADDRESS}:18000/api/health"
 echo
 docker ps --filter "name=$CONTAINER_NAME"

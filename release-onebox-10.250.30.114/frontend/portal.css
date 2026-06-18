@@ -89,6 +89,15 @@ body {
     background: #eef2ff;
 }
 
+#apiBaseLabel {
+    max-width: 240px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: inline-block;
+    vertical-align: bottom;
+}
+
 .action-btn.primary {
     background: #2563eb;
     color: #fff;
@@ -117,16 +126,22 @@ body {
     flex: 1;
 }
 
+/* [2026-05-21 01:55:19] nav-item 改为 button 后重置原生按钮样式，保持原视觉 */
 .nav-item {
     display: flex;
     align-items: center;
     gap: 14px;
+    width: 100%;
     padding: 12px 16px;
+    border: 0;
     border-radius: 14px;
+    background: transparent;
     cursor: pointer;
     transition: all 0.2s;
     color: #475569;
+    font: inherit;
     font-weight: 500;
+    text-align: left;
     white-space: nowrap;
 }
 
@@ -158,6 +173,23 @@ body {
     background: #eef2ff;
     color: #2563eb;
     font-weight: 600;
+}
+
+/* [2026-04-24 10:45:14] Agent 入口保留展示，置灰并提示暂未开放 */
+.nav-item.is-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+/* [2026-04-24 10:47:17] 使用右侧小徽标避免影响主导航文字对齐 */
+.nav-item-note {
+    margin-left: auto;
+    font-size: 0.72rem;
+    line-height: 1;
+    padding: 3px 6px;
+    border-radius: 10px;
+    background: #e2e8f0;
+    color: #475569;
 }
 
 .side-footer {
@@ -294,6 +326,32 @@ body {
 .status-pending {
     background: #fef3c7;
     color: #92400e;
+}
+
+/* [2026-04-24 14:13:58] 网络状态红绿灯图标 */
+.status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin: 0 4px;
+    vertical-align: middle;
+}
+
+.status-dot-green {
+    background: #16a34a;
+    box-shadow: 0 0 0 1px rgba(22, 163, 74, 0.25);
+}
+
+.status-dot-red {
+    background: #dc2626;
+    box-shadow: 0 0 0 1px rgba(220, 38, 38, 0.25);
+}
+
+/* [2026-04-24 14:16:10] 未接入 agent 使用黄灯状态 */
+.status-dot-yellow {
+    background: #f59e0b;
+    box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.25);
 }
 
 .resource-metrics {
@@ -686,7 +744,143 @@ body {
     box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
 }
 
+/* [2026-04-24 10:58:02] 使用人改为“可追加”输入行 */
+.owner-input-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.owner-add-btn {
+    white-space: nowrap;
+}
+
+/* [2026-04-24 14:19:44] 使用人标签支持删除 */
+.owner-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    min-height: 24px;
+}
+
+.owner-tag {
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #334155;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 0.8rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+}
+
+.owner-remove-x {
+    color: #b91c1c;
+    font-weight: 700;
+}
+
+/* [2026-04-24 14:24:20] 容器列表中的使用人只读标签样式 */
+.owner-tags-readonly {
+    align-items: center;
+}
+
+.owner-chip {
+    border: 1px solid #cbd5e1;
+    background: #f8fafc;
+    color: #334155;
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    display: inline-flex;
+    align-items: center;
+}
+
+/* [2026-04-24 14:43:47] 本地资源导航卡片：保持现有风格下提升入口可读性 */
+.resource-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.resource-card-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.resource-card-head h3 {
+    margin: 0;
+    font-size: 1.1rem;
+}
+
+.resource-url {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    font-size: 0.86rem;
+    background: #f1f5f9;
+    border-radius: 10px;
+    padding: 8px 10px;
+    color: #334155;
+    word-break: break-all;
+}
+
+/* [2026-04-24 15:03:50] 移除本地资源导航额外图标，保持简洁 */
+/* [2026-06-16 06:59:56] URL 文本继续隐藏，仅保留资源名称、说明和操作按钮 */
+.resource-url {
+    display: none;
+}
 
 .docker-server-field {
     max-width: 320px;
+}
+
+/* [2026-04-24 10:45:36] 轻提示组件样式，用于替代阻塞式 alert */
+.toast-container {
+    position: fixed;
+    top: 76px;
+    right: 20px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    pointer-events: none;
+}
+
+.toast {
+    min-width: 260px;
+    max-width: 460px;
+    border-radius: 12px;
+    padding: 10px 14px;
+    color: #0f172a;
+    background: #e2e8f0;
+    border: 1px solid #cbd5e1;
+    box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+    transform: translateY(-4px);
+    opacity: 0;
+    transition: all 0.18s ease;
+}
+
+.toast.show {
+    transform: translateY(0);
+    opacity: 1;
+}
+
+.toast-success {
+    background: #dcfce7;
+    border-color: #86efac;
+    color: #166534;
+}
+
+.toast-error {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #991b1b;
+}
+
+.toast-info {
+    background: #e0e7ff;
+    border-color: #a5b4fc;
+    color: #3730a3;
 }

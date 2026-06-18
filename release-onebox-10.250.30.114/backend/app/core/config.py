@@ -50,6 +50,7 @@ class Settings:
     server_state_file: Path = field(default_factory=_default_server_state_file)
     task_state_file: Path = field(default_factory=_default_task_state_file)
     artifact_state_file: Path = field(default_factory=_default_artifact_state_file)
+    artifact_upload_max_bytes: int = int(os.getenv("ARTIFACT_UPLOAD_MAX_BYTES", str(100 * 1024 * 1024)))
     heartbeat_timeout_seconds: int = int(os.getenv("HEARTBEAT_TIMEOUT_SECONDS", "45"))
     task_wait_timeout_seconds: float = float(os.getenv("TASK_WAIT_TIMEOUT_SECONDS", "25"))
     docker_task_timeout_seconds: float = float(os.getenv("DOCKER_TASK_TIMEOUT_SECONDS", "120"))

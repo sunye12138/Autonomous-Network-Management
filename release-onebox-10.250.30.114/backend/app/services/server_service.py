@@ -15,7 +15,7 @@ from app.schemas.server import ConnectionTestResponse, Server, ServerCreate, Ser
 class ServerService:
     HEARTBEAT_TIMEOUT_SECONDS = settings.heartbeat_timeout_seconds
     LEGACY_TEXT_REPLACEMENTS: Dict[str, str] = {
-        "????????? Agent": "\u9884\u7f6e\u670d\u52a1\u5668\uff0c\u5f85\u63a5\u5165 Agent",
+        ("?" * 9) + " Agent": "预置服务器，待接入 Agent",
     }
     PRESET_SERVERS: List[Dict[str, Any]] = [
         {
@@ -103,8 +103,10 @@ class ServerService:
                 existing["host"] = preset["host"]
                 existing["description"] = preset["description"]
                 existing["tags"] = list(preset.get("tags", []))
-                existing.setdefault("management_ip", preset["host"])
-                existing.setdefault("host_ip", preset["host"])
+                if not existing.get("management_ip"):
+                    existing["management_ip"] = preset["host"]
+                if not existing.get("host_ip"):
+                    existing["host_ip"] = preset["host"]
                 continue
 
             record = {

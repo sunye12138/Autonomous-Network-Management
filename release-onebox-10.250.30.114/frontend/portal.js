@@ -3,11 +3,16 @@ const viewTitle = document.getElementById('viewTitle');
 const versionBadge = document.getElementById('versionBadge');
 const sidebar = document.getElementById('sidebar');
 
-const BUILD_TAG = '\u6784\u5efa 20260417-04';
+// [2026-06-16 07:20:19] 更新构建标识，清掉浏览器端本地资源导航旧缓存
+const BUILD_TAG = '\u6784\u5efa 20260616-02';
 const API_KEY = 'customer-portal-api-base';
 const SERVER_KEY = 'customer-portal-selected-server';
 const DEFAULT_REQUEST_TIMEOUT_MS = 120000;
 const OFFLINE_PING_INTERVAL_MS = 60000;
+// [2026-04-24 11:28:51] 根治服务器列表周期性“被刷新”体感：默认关闭离线探测轮询
+const ENABLE_OFFLINE_PING_POLLING = false;
+// [2026-04-24 10:45:36] 当前阶段默认关闭智能助手入口，仅保留其它视图联调
+const ENABLE_AGENT_VIEW = false;
 
 const state = {
     currentView: 'home',
@@ -32,6 +37,7 @@ const state = {
     lastError: '',
     pingStatusByServerId: {},
     offlinePingTimerId: null,
+    serverDynamicTimerId: null,
     pingSweepRunning: false,
 };
 
@@ -39,8 +45,10 @@ const viewMeta = {
     home: { title: '\u96c6\u7fa4\u603b\u89c8 \u00b7 \u667a\u80fd\u7f51\u7ba1', badge: '\u878d\u5408\u89c6\u56fe \u00b7 V1 + V2 + V3' },
     servers: { title: '\u7269\u7406\u670d\u52a1\u5668\u7ba1\u7406 \u00b7 \u8d44\u6e90\u76d1\u63a7', badge: 'V1 \u00b7 \u7269\u7406\u57fa\u7840\u8bbe\u65bd' },
     docker: { title: '\u5bb9\u5668\u4e0e\u955c\u50cf\u7ba1\u7406 \u00b7 Docker', badge: 'V2 \u00b7 \u5bb9\u5668\u8fd0\u884c\u65f6' },
-    artifacts: { title: '\u5236\u54c1\u5e93 \u00b7 \u4ea4\u4ed8\u6587\u4ef6\u7ba1\u7406', badge: '\u9644\u52a0\u6a21\u5757 \u00b7 \u5236\u54c1\u4e0e\u90e8\u7f72\u5305' },
-    agent: { title: '\u667a\u80fd\u8fd0\u7ef4\u52a9\u624b', badge: 'V3 \u00b7 \u667a\u80fd\u8fd0\u7ef4\u52a9\u624b' },
+    artifacts: { title: '交付件管理 \u00b7 \u4ea4\u4ed8\u6587\u4ef6\u7ba1\u7406', badge: '\u9644\u52a0\u6a21\u5757 \u00b7 \u4ea4\u4ed8\u4ef6\u4e0e\u90e8\u7f72\u5305' },
+    'local-images': { title: '本地镜像库 \u00b7 \u955c\u50cf\u8d44\u4ea7', badge: '\u9644\u52a0\u6a21\u5757 \u00b7 Docker Image Archive' },
+    'local-resources': { title: '本地资源导航 \u00b7 \u5e73\u53f0\u5165\u53e3', badge: '\u4fbf\u6377\u5165\u53e3 \u00b7 \u5c40\u57df\u7f51\u8d44\u6e90' },
+    agent: { title: '\u667a\u80fd\u8fd0\u7ef4\u52a9\u624b', badge: '\u667a\u80fd\u8fd0\u7ef4\u52a9\u624b' },
 };
 
 function inferDefaultApiBase() {
@@ -60,13 +68,11 @@ function getApiBase() {
     const inferred = normalizeApiBase(inferDefaultApiBase());
     try {
         const stored = normalizeApiBase(localStorage.getItem(API_KEY));
-        if (!stored) {
-            localStorage.setItem(API_KEY, inferred);
-            return inferred;
+        // [2026-05-21 01:55:19] 合法的手动 API 配置优先，不再因 host 不同被自动推断值覆盖
+        if (stored) {
+            new URL(stored);
+            return stored;
         }
-        const storedUrl = new URL(stored);
-        const inferredUrl = new URL(inferred);
-        if (storedUrl.host === inferredUrl.host) return stored;
         localStorage.setItem(API_KEY, inferred);
     } catch {
         try { localStorage.setItem(API_KEY, inferred); } catch {}
@@ -171,6 +177,36 @@ function showInlineBanner(message, type = 'error') {
     const cls = type === 'info' ? 'info-banner' : 'api-error-banner';
     return `<div class="${cls}">${escapeHtml(message)}</div>`;
 }
+
+// [2026-04-24 10:45:36] 统一使用页面内轻提示，替代阻塞式 alert
+function showToast(message, type = 'info') {
+    const text = String(message || '').trim();
+    if (!text) return;
+    const id = 'portalToastContainer';
+    let container = document.getElementById(id);
+    if (!container) {
+        container = document.createElement('div');
+        container.id = id;
+        container.className = 'toast-container';
+        document.body.appendChild(container);
+    }
+    const item = document.createElement('div');
+    item.className = `toast toast-${type}`;
+    item.textContent = text;
+    container.appendChild(item);
+    window.setTimeout(() => item.classList.add('show'), 10);
+    window.setTimeout(() => {
+        item.classList.remove('show');
+        window.setTimeout(() => item.remove(), 180);
+    }, 2800);
+}
+
+function refreshApiBaseLabel() {
+    const label = document.getElementById('apiBaseLabel');
+    if (!label) return;
+    label.textContent = getApiBase();
+    label.title = getApiBase();
+}
 async function parseResponse(resp) {
     const raw = await resp.text();
     let data;
@@ -245,9 +281,31 @@ function getOwnerUser(server) {
     return String(server.ownerUser || '').trim();
 }
 
+// [2026-04-24 10:58:02] 使用人按常见分隔符拆分，支持 UI 中逐个追加
+function parseOwnerUsers(value) {
+    return String(value || '')
+        .split(/[，,、;；\n]/)
+        .map((item) => item.trim())
+        .filter(Boolean);
+}
+
+function joinOwnerUsers(users) {
+    return Array.from(new Set((users || []).map((item) => String(item || '').trim()).filter(Boolean))).join(', ');
+}
+
+// [2026-04-24 14:24:20] 容器列表使用人展示：复用服务器 owner_user 并标签化只读呈现
+function ownerTagsReadonlyHtml(serverId) {
+    const matched = state.servers.find((item) => Number(item.id) === Number(serverId));
+    const owners = parseOwnerUsers(matched?.ownerUser || '');
+    if (!owners.length) return '<span class="metric-subtext">-</span>';
+    return `<div class="owner-tags owner-tags-readonly">${owners.map((name) => `<span class="owner-chip">${escapeHtml(name)}</span>`).join('')}</div>`;
+}
+
 function chooseServer(serverId) {
     const matched = state.servers.find((item) => Number(item.id) === Number(serverId));
     if (!matched) return false;
+    // [2026-04-24 11:36:58] 已选中同一服务器时不重复触发后续重绘链路
+    if (Number(state.selectedServerId) === Number(matched.id)) return false;
     state.selectedServerId = Number(matched.id);
     state.selectedServerName = matched.name;
     saveSelectedServer();
@@ -380,6 +438,17 @@ function setPingStatus(serverId, payload) {
     state.pingStatusByServerId[key] = { ...(state.pingStatusByServerId[key] || {}), ...payload };
 }
 
+// [2026-04-24 11:16:57] 仅比较影响展示的核心字段，避免时间戳变化触发无意义重绘
+function isPingUiChanged(before, after) {
+    const prev = before || {};
+    const next = after || {};
+    return (
+        String(prev.state || '') !== String(next.state || '') ||
+        String(prev.message || '') !== String(next.message || '') ||
+        String(prev.latencyMs ?? '') !== String(next.latencyMs ?? '')
+    );
+}
+
 function cleanupPingStateCache() {
     const validIds = new Set(state.servers.map((item) => pingCacheKey(item.id)));
     Object.keys(state.pingStatusByServerId).forEach((key) => {
@@ -398,29 +467,20 @@ function stopOfflinePingLoop() {
 }
 
 async function pingOfflineServers(options = {}) {
+    // [2026-04-24 11:18:31] 深度优化：离线探测只更新徽标，不触发整列表重绘
     const { renderAfterEach = false } = options;
     if (state.pingSweepRunning) return;
 
     const offlineServers = state.servers.filter((item) => item.status !== 'online');
     if (!offlineServers.length) {
         cleanupPingStateCache();
-        if (state.currentView === 'servers') renderServersView();
         return;
     }
 
     state.pingSweepRunning = true;
-    offlineServers.forEach((server) => {
-        setPingStatus(server.id, {
-            state: 'checking',
-            message: '\u6b63\u5728\u68c0\u6d4b\u7f51\u7edc\u8fde\u901a\u6027',
-            checkedAt: new Date().toISOString(),
-            latencyMs: null,
-        });
-    });
-
-    if (state.currentView === 'servers') renderServersView();
 
     for (const server of offlineServers) {
+        const before = getPingStatus(server.id);
         try {
             const data = await request(`/servers/${server.id}/ping`, { method: 'POST', timeoutMs: 10000 });
             setPingStatus(server.id, {
@@ -438,41 +498,28 @@ async function pingOfflineServers(options = {}) {
             });
         }
 
+        const after = getPingStatus(server.id);
+        if (isPingUiChanged(before, after)) {
+            updateServerNetworkBadgeInPlace(server.id);
+        }
         if (state.currentView === 'servers' && renderAfterEach) {
-            renderServersView();
+            updateServerNetworkBadgeInPlace(server.id);
         }
     }
 
     state.pingSweepRunning = false;
-    if (state.currentView === 'servers') renderServersView();
 }
 
 function startOfflinePingLoop() {
     stopOfflinePingLoop();
     if (state.currentView !== 'servers') return;
-    pingOfflineServers({ renderAfterEach: true });
+    // [2026-04-24 11:28:51] 仅在进入页面时探测一次，避免 setInterval 持续触发局部更新
+    pingOfflineServers({ renderAfterEach: false });
+    if (!ENABLE_OFFLINE_PING_POLLING) return;
     state.offlinePingTimerId = window.setInterval(() => {
         pingOfflineServers({ renderAfterEach: false });
     }, OFFLINE_PING_INTERVAL_MS);
 }
-
-function networkStatusBadgeHtml(server) {
-    if (server.status === 'online') {
-        return '<span class="status-badge status-online">网络正常-在线</span>';
-    }
-
-    const ping = getPingStatus(server.id);
-    if (ping?.state === 'success') {
-        return '<span class="status-badge status-pending">网络正常-未接入agent</span>';
-    }
-    if (ping?.state === 'failed') {
-        return '<span class="status-badge status-offline">网络异常-离线</span>';
-    }
-    return '<span class="status-badge status-pending">网络检测中</span>';
-}
-
-
-
 
 function sanitizeDockerErrorMessage(message) {
     const text = String(message || '').trim();
@@ -490,18 +537,81 @@ function dockerServerOptionsHtml() {
 }
 
 function networkStatusBadgeHtml(server) {
+    // [2026-04-24 14:13:58] 网络状态改为红绿灯图标 + 文案，增强一眼识别
     if (server.status === 'online') {
-        return '<span class="status-badge status-online">\u7f51\u7edc\u6b63\u5e38-\u5728\u7ebf</span>';
+        return '<span class="status-badge status-online"><span class="status-dot status-dot-green"></span> 网络正常 - <span class="status-dot status-dot-green"></span> 在线</span>';
     }
 
     const ping = getPingStatus(server.id);
     if (ping?.state === 'success') {
-        return '<span class="status-badge status-pending">\u7f51\u7edc\u6b63\u5e38-\u672a\u63a5\u5165agent</span>';
+        return '<span class="status-badge status-pending"><span class="status-dot status-dot-green"></span> 网络正常 - <span class="status-dot status-dot-yellow"></span> 未接入agent</span>';
     }
     if (ping?.state === 'failed') {
-        return '<span class="status-badge status-offline">\u7f51\u7edc\u5f02\u5e38-\u79bb\u7ebf</span>';
+        return '<span class="status-badge status-offline"><span class="status-dot status-dot-red"></span> 网络异常 - <span class="status-dot status-dot-red"></span> 离线</span>';
     }
-    return '<span class="status-badge status-pending">\u7f51\u7edc\u68c0\u6d4b\u4e2d</span>';
+    return '<span class="status-badge status-pending"><span class="status-dot status-dot-red"></span> 网络检测中</span>';
+}
+
+// [2026-04-24 11:18:31] 仅更新网络状态徽标，避免服务器列表整卡片重绘
+function updateServerNetworkBadgeInPlace(serverId) {
+    if (state.currentView !== 'servers') return;
+    const card = dynamicPanel.querySelector(`[data-server-card-id="${serverId}"]`);
+    if (!card) return;
+    const server = state.servers.find((item) => Number(item.id) === Number(serverId));
+    if (!server) return;
+    const badgeWrap = card.querySelector('.status-group [data-role="network-badge"]');
+    if (!badgeWrap) return;
+    badgeWrap.innerHTML = networkStatusBadgeHtml(server);
+}
+
+// [2026-04-24 11:41:37] 仅局部刷新动态指标（状态/CPU/内存），避免静态信息重绘
+function updateServerDynamicMetricsInPlace(serverId) {
+    if (state.currentView !== 'servers') return;
+    const card = dynamicPanel.querySelector(`[data-server-card-id="${serverId}"]`);
+    if (!card) return;
+    const server = state.servers.find((item) => Number(item.id) === Number(serverId));
+    if (!server) return;
+
+    const cpuPercent = Number.isFinite(server.cpu) ? server.cpu : null;
+    const memPercent = Number.isFinite(server.mem) ? server.mem : null;
+    const cpuWidth = Number.isFinite(cpuPercent) ? Math.round(cpuPercent) : 0;
+    const memWidth = Number.isFinite(memPercent) ? Math.round(memPercent) : 0;
+
+    const cpuFill = card.querySelector('[data-role="cpu-fill"]');
+    const cpuValue = card.querySelector('[data-role="cpu-value"]');
+    const memFill = card.querySelector('[data-role="mem-fill"]');
+    const memValue = card.querySelector('[data-role="mem-value"]');
+
+    if (cpuFill) cpuFill.style.width = `${cpuWidth}%`;
+    if (cpuValue) cpuValue.textContent = formatPercent(cpuPercent);
+    if (memFill) memFill.style.width = `${memWidth}%`;
+    if (memValue) memValue.textContent = formatPercent(memPercent);
+
+    updateServerNetworkBadgeInPlace(serverId);
+}
+
+async function refreshServerDynamicMetricsOnce() {
+    if (state.currentView !== 'servers') return;
+    const ok = await safeLoadServers({ silent: true });
+    if (!ok || state.currentView !== 'servers') return;
+    state.servers.forEach((server) => updateServerDynamicMetricsInPlace(server.id));
+    await pingOfflineServers({ renderAfterEach: false });
+}
+
+function stopServerDynamicRefreshLoop() {
+    if (state.serverDynamicTimerId) {
+        window.clearInterval(state.serverDynamicTimerId);
+        state.serverDynamicTimerId = null;
+    }
+}
+
+function startServerDynamicRefreshLoop() {
+    stopServerDynamicRefreshLoop();
+    if (state.currentView !== 'servers') return;
+    // [2026-04-24 11:41:37] 每 60 秒仅刷新动态字段，不触发整卡片重绘
+    state.serverDynamicTimerId = window.setInterval(() => {
+        refreshServerDynamicMetricsOnce();
+    }, OFFLINE_PING_INTERVAL_MS);
 }
 
 function renderHomeView() {
@@ -516,7 +626,8 @@ function renderHomeView() {
             <div class="summary-card"><i class="fas fa-layer-group fa-2x"></i><h3>${state.dockerImages.length}</h3><p>\u955c\u50cf\u6570\u91cf</p><small>\u5f53\u524d\u73af\u5883\u5df2\u540c\u6b65\u955c\u50cf</small></div>
             <div class="summary-card"><i class="fas fa-chart-line"></i><h3>${avgCpu}%</h3><p>\u5e73\u5747 CPU \u8d1f\u8f7d</p><small>\u5f85\u5904\u7406\u4efb\u52a1 ${pendingCount}</small></div>
         </div>
-        <div class="panel"><i class="fas fa-comment-dots"></i> <strong>\u9875\u9762\u4fee\u590d\u8bf4\u660e</strong><br/>\u9875\u9762\u73b0\u5728\u4f1a\u6309\u5f53\u524d\u8bbf\u95ee\u4e3b\u673a\u81ea\u52a8\u63a8\u5bfc\u63a5\u53e3\u5730\u5740\uff0c\u540c\u65f6\u4e0d\u518d\u4e3b\u52a8\u4e2d\u65ad\u8bf7\u6c42\uff0c\u907f\u514d\u5f02\u5e38\u4e2d\u65ad\u63d0\u793a\u3002</div>
+        <!-- [2026-04-24 10:45:36] 首页文案改为通用业务说明，避免暴露临时调试信息 -->
+        <div class="panel"><i class="fas fa-comment-dots"></i> <strong>平台说明</strong><br/>本页面用于统一查看服务器状态、容器镜像与交付件信息，支持按当前访问地址自动匹配 API 连接。</div>
     `;
 }
 
@@ -532,12 +643,15 @@ function renderServersView() {
         const memoryHint = Number.isFinite(server.memoryUsedBytes) && Number.isFinite(server.memoryTotalBytes) && server.memoryTotalBytes > 0
             ? `<div class="metric-subtext">${formatBytes(server.memoryUsedBytes)} / ${formatBytes(server.memoryTotalBytes)}</div>`
             : '';
-        const offlineHint = server.status !== 'online' && (Number.isFinite(cpuPercent) || Number.isFinite(memPercent))
-            ? '<div class="metric-subtext">\u79bb\u7ebf\uff0c\u663e\u793a\u6700\u8fd1\u4e00\u6b21\u4e0a\u62a5</div>'
-            : '';
+        // [2026-04-24 11:12:56] 精简提示文案，避免服务器卡片信息噪音
+        const offlineHint = '';
         const isSelected = Number(server.id) === Number(state.selectedServerId);
         const networkBadge = networkStatusBadgeHtml(server);
-        const ownerValue = String(server.ownerUser || '').trim();
+        const ownerUsers = parseOwnerUsers(server.ownerUser);
+        // [2026-04-24 11:46:15] 服务器名与详情 IP 相同则隐藏重复 IP 行
+        const nameText = String(server.name || '').trim();
+        const ipText = String(server.ip || '').trim();
+        const ipLine = (nameText && ipText && nameText === ipText) ? '' : `IP：${escapeHtml(server.ip)}<br>`;
 
         html += `
             <div class="server-card ${isSelected ? 'is-selected' : ''}" data-server-card-id="${server.id}">
@@ -548,27 +662,34 @@ function renderServersView() {
                             <span>${escapeHtml(server.name)}</span>
                         </div>
                         <div class="status-group">
-                            ${networkBadge}
+                            <span data-role="network-badge">${networkBadge}</span>
                         </div>
-                        <div class="server-ip">\u7ba1\u7406 IP\uff1a${escapeHtml(server.ip)}<br>\u5bbf\u4e3b\u673a IP\uff1a${escapeHtml(server.hostIp)}<br>\u4f7f\u7528\u4eba\uff1a${escapeHtml(server.reportedUser)}<br>\u64cd\u4f5c\u7cfb\u7edf\uff1a${escapeHtml(server.osName)} \uff5c \u8fd0\u884c\u65f6\uff1a${escapeHtml(server.runtime)}<br>\u6700\u8fd1\u5fc3\u8df3\uff1a${formatDate(server.lastSeenAt)}</div>
+                        <div class="server-ip">${ipLine}\u64cd\u4f5c\u7cfb\u7edf\uff1a${escapeHtml(server.osName)} \uff5c \u8fd0\u884c\u65f6\uff1a${escapeHtml(server.runtime)}<br>\u6700\u8fd1\u5fc3\u8df3\uff1a${formatDate(server.lastSeenAt)}</div>
                     </div>
                     <div class="resource-metrics">
                         <div class="metric">
                             <div class="metric-label">CPU \u5360\u7528</div>
-                            <div class="progress-bar-bg"><div class="progress-fill" style="width: ${cpuWidth}%"></div></div>
-                            <div class="metric-value">${formatPercent(cpuPercent)}</div>
+                            <div class="progress-bar-bg"><div class="progress-fill" data-role="cpu-fill" style="width: ${cpuWidth}%"></div></div>
+                            <div class="metric-value" data-role="cpu-value">${formatPercent(cpuPercent)}</div>
                         </div>
                         <div class="metric">
                             <div class="metric-label">\u5185\u5b58\u5360\u7528</div>
-                            <div class="progress-bar-bg"><div class="progress-fill" style="width: ${memWidth}%"></div></div>
-                            <div class="metric-value">${formatPercent(memPercent)}</div>
+                            <div class="progress-bar-bg"><div class="progress-fill" data-role="mem-fill" style="width: ${memWidth}%"></div></div>
+                            <div class="metric-value" data-role="mem-value">${formatPercent(memPercent)}</div>
                             ${memoryHint}
                             ${offlineHint}
                         </div>
                         <label class="metric owner-metric">
-                            <span class="metric-label">\u4f7f\u7528\u4eba</span>
-                            <input class="owner-input" data-server-id="${server.id}" value="${escapeHtml(ownerValue)}" placeholder="">
-                            <span class="metric-subtext">\u4fdd\u5b58\u540e\u4f1a\u5199\u5165\u540e\u7aef\u8bb0\u5f55</span>
+                            <span class="metric-label">使用人</span>
+                            <div class="owner-tags">
+                                ${ownerUsers.length
+                                    ? ownerUsers.map((name) => `<button type="button" class="owner-tag owner-remove-btn" data-server-id="${server.id}" data-owner-name="${escapeHtml(name)}"><span>${escapeHtml(name)}</span><span class="owner-remove-x">×</span></button>`).join('')
+                                    : '<span class="metric-subtext">-</span>'}
+                            </div>
+                            <div class="owner-input-row">
+                                <input class="owner-input owner-add-input" data-server-id="${server.id}" value="" placeholder="添加使用人">
+                                <button class="action-btn owner-add-btn" type="button" data-server-id="${server.id}">添加</button>
+                            </div>
                         </label>
                     </div>
                 </div>
@@ -578,28 +699,77 @@ function renderServersView() {
     html += `<div style="margin-top:20px; text-align:center; color:#6c7b94;">\u5171\u8ba1 ${state.servers.length} \u53f0\u670d\u52a1\u5668 \uff5c \u5728\u7ebf ${state.overview.online_servers || 0}</div></div>`;
     dynamicPanel.innerHTML = html;
 
+    // [2026-04-24 15:31:45] 恢复卡片本体点击选中，保留防误触保护
     dynamicPanel.querySelectorAll('[data-server-card-id]').forEach((card) => {
         card.addEventListener('click', async (event) => {
-            if (event.target.closest('.owner-input')) return;
+            if (event.target.closest('.owner-input') || event.target.closest('.owner-input-row') || event.target.closest('.owner-add-btn') || event.target.closest('.owner-remove-btn')) return;
+            const selectedText = window.getSelection ? String(window.getSelection().toString() || '').trim() : '';
+            if (selectedText) return;
             if (!chooseServer(card.dataset.serverCardId)) return;
             await safeLoadDockerResources({ silent: true });
             renderServersView();
         });
     });
 
-    dynamicPanel.querySelectorAll('.owner-input').forEach((input) => {
-        input.addEventListener('change', async () => {
+    async function appendOwnerUser(serverId, rawValue, input) {
+        const nextUser = String(rawValue || '').trim();
+        if (!nextUser) return;
+        const matched = state.servers.find((item) => String(item.id) === String(serverId));
+        const currentUsers = parseOwnerUsers(matched?.ownerUser || '');
+        currentUsers.push(nextUser);
+        const merged = joinOwnerUsers(currentUsers);
+        try {
+            await saveOwnerUser(serverId, merged);
+            if (matched) {
+                matched.ownerUser = merged;
+                matched.reportedUser = merged || '-';
+            }
+            if (input) input.value = '';
+            renderServersView();
+            showToast('使用人已添加', 'success');
+        } catch (error) {
+            showToast(`保存使用人失败：${error.message}`, 'error');
+        }
+    }
+
+    dynamicPanel.querySelectorAll('.owner-add-btn').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const serverId = button.dataset.serverId;
+            const input = dynamicPanel.querySelector(`.owner-add-input[data-server-id="${serverId}"]`);
+            await appendOwnerUser(serverId, input?.value, input);
+        });
+    });
+
+    dynamicPanel.querySelectorAll('.owner-add-input').forEach((input) => {
+        input.addEventListener('keydown', async (event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
             const serverId = input.dataset.serverId;
-            const value = input.value;
+            await appendOwnerUser(serverId, input.value, input);
+        });
+    });
+
+    // [2026-04-24 14:19:44] 使用人支持确认后删除
+    dynamicPanel.querySelectorAll('.owner-remove-btn').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const serverId = button.dataset.serverId;
+            const ownerName = String(button.dataset.ownerName || '').trim();
+            if (!ownerName) return;
+            const ok = window.confirm(`确认删除使用人：${ownerName} ?`);
+            if (!ok) return;
+
+            const matched = state.servers.find((item) => String(item.id) === String(serverId));
+            if (!matched) return;
+            const nextUsers = parseOwnerUsers(matched.ownerUser || '').filter((name) => name !== ownerName);
+            const merged = joinOwnerUsers(nextUsers);
             try {
-                await saveOwnerUser(serverId, value);
-                const matched = state.servers.find((item) => String(item.id) === String(serverId));
-                if (matched) {
-                    matched.ownerUser = String(value || '').trim();
-                    matched.reportedUser = matched.ownerUser || '-';
-                }
+                await saveOwnerUser(serverId, merged);
+                matched.ownerUser = merged;
+                matched.reportedUser = merged || '-';
+                renderServersView();
+                showToast('使用人已删除', 'success');
             } catch (error) {
-                alert(`\u4fdd\u5b58\u4f7f\u7528\u4eba\u5931\u8d25\uff1a${error.message}`);
+                showToast(`删除使用人失败：${error.message}`, 'error');
             }
         });
     });
@@ -607,10 +777,11 @@ function renderServersView() {
 
 
 function renderDockerView() {
+    // [2026-04-24 14:31:21] 容器列表“使用人”列后置，靠近操作列
     const containerRows = state.dockerRows.map((item) => `
         <tr>
             <td>${escapeHtml(item.server)}</td><td><code>${escapeHtml(item.containerName)}</code></td><td><code>${escapeHtml(item.imageName)}</code></td><td><span class="tag">${escapeHtml(statusText(item.status))}</span></td><td>${escapeHtml(item.ports)}</td><td>${escapeHtml(item.runningFor)}</td>
-            <td><button class="action-btn" data-action="start-container" data-server-id="${item.serverId}" data-name="${escapeHtml(item.containerName)}">\u542f\u52a8</button><button class="action-btn" data-action="stop-container" data-server-id="${item.serverId}" data-name="${escapeHtml(item.containerName)}">\u505c\u6b62</button></td>
+            <td><button class="action-btn" data-action="start-container" data-server-id="${item.serverId}" data-name="${escapeHtml(item.containerName)}">\u542f\u52a8</button><button class="action-btn" data-action="stop-container" data-server-id="${item.serverId}" data-name="${escapeHtml(item.containerName)}">\u505c\u6b62</button></td><td>${ownerTagsReadonlyHtml(item.serverId)}</td>
         </tr>
     `).join('');
     const imageRows = state.dockerImages.map((image) => `
@@ -642,7 +813,7 @@ function renderDockerView() {
             ${serverSelector}
         </div>
         <div class="panel-stack">
-            <div class="panel docker-section"><div class="panel-head" style="margin-bottom:16px;"><div><h3>\u5bb9\u5668\u5217\u8868</h3><p class="subtle-text">\u5982\u679c\u5bb9\u5668\u4e3a\u7a7a\u4f46\u955c\u50cf\u6b63\u5e38\uff0c\u8bf4\u660e\u5f53\u524d\u4e3b\u673a\u6ca1\u6709\u5bb9\u5668\uff0c\u6216\u63a5\u53e3\u8fd4\u56de\u4e3a\u7a7a\u3002</p></div><div class="tag">${state.dockerRows.length} \u4e2a\u5bb9\u5668</div></div>${showInlineBanner(containerError)}<table class="data-table"><thead><tr><th>\u670d\u52a1\u5668\u8282\u70b9</th><th>\u5bb9\u5668\u540d\u79f0</th><th>\u955c\u50cf\u540d\u79f0</th><th>\u72b6\u6001</th><th>\u7aef\u53e3</th><th>\u8fd0\u884c\u65f6\u957f</th><th>\u64cd\u4f5c</th></tr></thead><tbody>${containerRows || '<tr><td colspan="7">\u6682\u65e0\u5bb9\u5668\u6570\u636e\u3002</td></tr>'}</tbody></table></div>
+            <div class="panel docker-section"><div class="panel-head" style="margin-bottom:16px;"><div><h3>\u5bb9\u5668\u5217\u8868</h3><p class="subtle-text">\u5982\u679c\u5bb9\u5668\u4e3a\u7a7a\u4f46\u955c\u50cf\u6b63\u5e38\uff0c\u8bf4\u660e\u5f53\u524d\u4e3b\u673a\u6ca1\u6709\u5bb9\u5668\uff0c\u6216\u63a5\u53e3\u8fd4\u56de\u4e3a\u7a7a\u3002</p></div><div class="tag">${state.dockerRows.length} \u4e2a\u5bb9\u5668</div></div>${showInlineBanner(containerError)}<table class="data-table"><thead><tr><th>\u670d\u52a1\u5668\u8282\u70b9</th><th>\u5bb9\u5668\u540d\u79f0</th><th>\u955c\u50cf\u540d\u79f0</th><th>\u72b6\u6001</th><th>\u7aef\u53e3</th><th>\u8fd0\u884c\u65f6\u957f</th><th>\u64cd\u4f5c</th><th>\u4f7f\u7528\u4eba</th></tr></thead><tbody>${containerRows || '<tr><td colspan="8">\u6682\u65e0\u5bb9\u5668\u6570\u636e\u3002</td></tr>'}</tbody></table></div>
             <div class="panel docker-section"><div class="panel-head" style="margin-bottom:16px;"><div><h3>\u955c\u50cf\u5217\u8868</h3><p class="subtle-text">\u955c\u50cf\u6570\u636e\u6765\u81ea\u63a5\u53e3 /servers/{id}/images\u3002</p></div><div class="tag">${state.dockerImages.length} \u4e2a\u955c\u50cf</div></div>${showInlineBanner(imageError)}<table class="data-table"><thead><tr><th>\u4ed3\u5e93</th><th>\u6807\u7b7e</th><th>\u955c\u50cf ID</th><th>Digest</th><th>\u521b\u5efa\u65f6\u95f4</th><th>\u5927\u5c0f</th><th>\u64cd\u4f5c</th></tr></thead><tbody>${imageRows || '<tr><td colspan="7">\u6682\u65e0\u955c\u50cf\u6570\u636e\u3002</td></tr>'}</tbody></table></div>
         </div>
     `;
@@ -660,7 +831,7 @@ function renderDockerView() {
                 await safeLoadDockerResources({ silent: true });
                 renderDockerView();
             } catch (error) {
-                alert(`\u542f\u52a8\u5931\u8d25\uff1a${error.message}`);
+                showToast(`启动失败：${error.message}`, 'error');
             }
         });
     });
@@ -671,26 +842,26 @@ function renderDockerView() {
                 await safeLoadDockerResources({ silent: true });
                 renderDockerView();
             } catch (error) {
-                alert(`\u505c\u6b62\u5931\u8d25\uff1a${error.message}`);
+                showToast(`停止失败：${error.message}`, 'error');
             }
         });
     });
     dynamicPanel.querySelectorAll('button[data-action="export-image"]').forEach((button) => {
         button.addEventListener('click', async () => {
-            if (!state.selectedServerId) return alert('\u8bf7\u5148\u9009\u62e9\u5f53\u524d\u73af\u5883\u3002');
+            if (!state.selectedServerId) return showToast('请先选择当前环境。', 'error');
             try {
                 const result = await request(`/servers/${state.selectedServerId}/images/export`, { method: 'POST', body: JSON.stringify({ image_ref: button.dataset.reference }) });
                 await Promise.allSettled([safeLoadArtifacts({ silent: true }), safeLoadTasks({ silent: true }), safeLoadOverview({ silent: true })]);
-                alert(`\u5bfc\u51fa\u4efb\u52a1\u5df2\u63d0\u4ea4\uff1a${result?.message || button.dataset.reference}`);
+                showToast(`导出任务已提交：${result?.message || button.dataset.reference}`, 'success');
             } catch (error) {
-                alert(`\u5bfc\u51fa\u5931\u8d25\uff1a${error.message}`);
+                showToast(`导出失败：${error.message}`, 'error');
             }
         });
     });
 }
 
 function artifactCardsHtml() {
-    if (!state.artifacts.length) return '<div class="artifact-card">\u5f53\u524d\u6682\u65e0\u5236\u54c1\uff0c\u8bf7\u5148\u4e0a\u4f20\u3002</div>';
+    if (!state.artifacts.length) return '<div class="artifact-card">当前暂无交付件，请先上传。</div>';
     return state.artifacts.map((artifact) => {
         const actions = [`<a class="action-btn" href="${api(`/artifacts/${artifact.id}/download`)}" target="_blank" rel="noopener noreferrer"><i class="fas fa-download"></i> \u4e0b\u8f7d</a>`];
         if (artifact.kind === 'docker-image') actions.push(`<button class="action-btn" data-action="import-image" data-id="${artifact.id}"><i class="fas fa-file-import"></i> \u5bfc\u5165\u955c\u50cf</button>`);
@@ -703,10 +874,10 @@ function renderArtifactsView() {
     dynamicPanel.innerHTML = `
         ${showErrorBanner()}
         <div class="panel" style="margin-bottom:16px;">
-            <div class="panel-head"><div><h2>\u5236\u54c1\u5e93</h2><p>\u4e0a\u4f20\u955c\u50cf\u5305\u3001\u90e8\u7f72\u5305\uff0c\u5e76\u76f4\u63a5\u5bfc\u5165\u6216\u90e8\u7f72\u5230\u5f53\u524d\u73af\u5883\u3002</p></div><div class="section-actions"><button class="action-btn" id="refreshArtifactsBtn"><i class="fas fa-sync-alt"></i> \u5237\u65b0</button></div></div>
+            <div class="panel-head"><div><h2>交付件管理</h2><p>上传镜像包、部署包，并直接导入或部署到当前环境。</p></div><div class="section-actions"><button class="action-btn" id="refreshArtifactsBtn"><i class="fas fa-sync-alt"></i> 刷新</button></div></div>
             <div class="form-grid">
-                <form class="form-card" id="artifactUploadForm"><h3>\u4e0a\u4f20\u4ea4\u4ed8\u4ef6</h3><label class="field"><span>\u6587\u4ef6</span><input id="artifactFileInput" type="file" required></label><label class="field"><span>\u7c7b\u578b</span><select id="artifactKindSelect"><option value="docker-image">\u955c\u50cf\u5305</option><option value="compose-bundle">\u7f16\u6392\u90e8\u7f72\u5305</option><option value="generic">\u901a\u7528\u5236\u54c1</option></select></label><button class="action-btn primary" type="submit"><i class="fas fa-upload"></i> \u4e0a\u4f20\u5230\u5236\u54c1\u5e93</button></form>
-                <div class="form-card"><h3>\u7f16\u6392\u90e8\u7f72\u53c2\u6570</h3><label class="field"><span>\u9879\u76ee\u540d</span><input id="composeProjectInput" placeholder="demo-app"></label><label class="field"><span>\u7f16\u6392\u6587\u4ef6</span><input id="composeFileInput" value="docker-compose.yml"></label><label class="field"><span>\u5de5\u4f5c\u76ee\u5f55</span><input id="composeWorkdirInput" placeholder="deploy \u6216 packages/app"></label><div class="info-banner">\u5f53\u524d\u73af\u5883\uff1a${escapeHtml(state.selectedServerName || '\u672a\u9009\u62e9')}\u3002\u5982\u9700\u5bfc\u5165\u6216\u90e8\u7f72\uff0c\u8bf7\u5148\u5728\u670d\u52a1\u5668\u5217\u8868\u4e2d\u9009\u5b9a\u73af\u5883\u3002</div></div>
+                <form class="form-card" id="artifactUploadForm"><h3>上传交付件</h3><label class="field"><span>文件</span><input id="artifactFileInput" type="file" required></label><label class="field"><span>类型</span><select id="artifactKindSelect"><option value="docker-image">镜像包</option><option value="compose-bundle">编排部署包</option><option value="generic">通用交付件</option></select></label><button class="action-btn primary" type="submit"><i class="fas fa-upload"></i> 上传到交付件管理</button></form>
+                <div class="form-card"><h3>编排部署参数</h3><label class="field"><span>项目名</span><input id="composeProjectInput" placeholder="demo-app"></label><label class="field"><span>编排文件</span><input id="composeFileInput" value="docker-compose.yml"></label><label class="field"><span>工作目录</span><input id="composeWorkdirInput" placeholder="deploy 或 packages/app"></label><div class="info-banner">当前环境：${escapeHtml(state.selectedServerName || '未选择')}。如需导入或部署，请先在服务器列表中选定环境。</div></div>
             </div>
         </div>
         <div class="artifact-grid" id="artifactGridWrap">${artifactCardsHtml()}</div>
@@ -716,29 +887,29 @@ function renderArtifactsView() {
         event.preventDefault();
         const file = document.getElementById('artifactFileInput')?.files?.[0];
         const kind = document.getElementById('artifactKindSelect')?.value || 'generic';
-        if (!file) return alert('\u8bf7\u5148\u9009\u62e9\u6587\u4ef6');
+        if (!file) return showToast('请先选择文件', 'error');
         try {
             const resp = await fetch(api('/artifacts/upload'), { method: 'POST', headers: { 'Content-Type': file.type || 'application/octet-stream', 'X-Artifact-Name': encodeURIComponent(file.name), 'X-Artifact-Kind': encodeURIComponent(kind), 'X-Artifact-Source': encodeURIComponent('customer-portal') }, body: file });
             await parseResponse(resp);
             await Promise.allSettled([safeLoadArtifacts({ silent: true }), safeLoadOverview({ silent: true })]);
             renderArtifactsView();
-        } catch (error) { alert(`\u4e0a\u4f20\u5931\u8d25\uff1a${error.message}`); }
+        } catch (error) { showToast(`上传失败：${error.message}`, 'error'); }
     });
     dynamicPanel.querySelectorAll('button[data-action="import-image"]').forEach((button) => {
         button.addEventListener('click', async () => {
-            if (!state.selectedServerId) return alert('\u8bf7\u5148\u5728\u670d\u52a1\u5668\u5217\u8868\u91cc\u9009\u62e9\u5f53\u524d\u73af\u5883');
+            if (!state.selectedServerId) return showToast('请先在服务器列表里选择当前环境', 'error');
             try {
                 await request(`/servers/${state.selectedServerId}/images/import`, { method: 'POST', body: JSON.stringify({ artifact_id: Number(button.dataset.id) }) });
                 await Promise.allSettled([safeLoadTasks({ silent: true }), safeLoadOverview({ silent: true }), safeLoadDockerResources({ silent: true })]);
                 renderArtifactsView();
             } catch (error) {
-                alert(`\u5bfc\u5165\u5931\u8d25\uff1a${error.message}`);
+                showToast(`导入失败：${error.message}`, 'error');
             }
         });
     });
     dynamicPanel.querySelectorAll('button[data-action="deploy-compose"]').forEach((button) => {
         button.addEventListener('click', async () => {
-            if (!state.selectedServerId) return alert('\u8bf7\u5148\u5728\u670d\u52a1\u5668\u5217\u8868\u91cc\u9009\u62e9\u5f53\u524d\u73af\u5883');
+            if (!state.selectedServerId) return showToast('请先在服务器列表里选择当前环境', 'error');
             try {
                 await request(`/servers/${state.selectedServerId}/deployments/compose`, {
                     method: 'POST',
@@ -752,8 +923,141 @@ function renderArtifactsView() {
                 await Promise.allSettled([safeLoadTasks({ silent: true }), safeLoadOverview({ silent: true }), safeLoadDockerResources({ silent: true })]);
                 renderArtifactsView();
             } catch (error) {
-                alert(`\u90e8\u7f72\u5931\u8d25\uff1a${error.message}`);
+                showToast(`部署失败：${error.message}`, 'error');
             }
+        });
+    });
+}
+
+function renderLocalImagesView() {
+    // [2026-04-24 14:38:39] 新增本地镜像库视图：聚焦 docker-image 类型交付件
+    const dockerImageArtifacts = state.artifacts.filter((artifact) => artifact.kind === 'docker-image');
+    const cards = dockerImageArtifacts.map((artifact) => `
+        <div class="artifact-card">
+            <div style="font-weight:700; font-size:1rem;">${escapeHtml(artifact.file_name)}</div>
+            <div class="artifact-meta">大小：${formatBytes(artifact.size_bytes)}<br>上传时间：${formatDate(artifact.created_at)}</div>
+            <div class="artifact-actions">
+                <a class="action-btn" href="${api(`/artifacts/${artifact.id}/download`)}" target="_blank" rel="noopener noreferrer"><i class="fas fa-download"></i> 下载</a>
+                <button class="action-btn" data-action="local-import-image" data-id="${artifact.id}"><i class="fas fa-file-import"></i> 导入镜像</button>
+            </div>
+        </div>
+    `).join('');
+
+    dynamicPanel.innerHTML = `
+        ${showErrorBanner()}
+        <div class="panel" style="margin-bottom:16px;">
+            <div class="panel-head">
+                <div><h2>本地镜像库</h2><p>展示交付件中的镜像包，可直接下载或导入当前环境。</p></div>
+                <div class="section-actions"><button class="action-btn" id="refreshLocalImagesBtn"><i class="fas fa-sync-alt"></i> 刷新</button></div>
+            </div>
+            <div class="info-banner">当前环境：${escapeHtml(state.selectedServerName || '未选择')}。导入前请确认已在服务器列表选定环境。</div>
+        </div>
+        <div class="artifact-grid">${cards || '<div class="artifact-card">当前暂无镜像包交付件。</div>'}</div>
+    `;
+
+    document.getElementById('refreshLocalImagesBtn')?.addEventListener('click', async () => {
+        await safeLoadArtifacts();
+        renderLocalImagesView();
+    });
+
+    dynamicPanel.querySelectorAll('button[data-action="local-import-image"]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            if (!state.selectedServerId) return showToast('请先在服务器列表里选择当前环境', 'error');
+            try {
+                await request(`/servers/${state.selectedServerId}/images/import`, { method: 'POST', body: JSON.stringify({ artifact_id: Number(button.dataset.id) }) });
+                await Promise.allSettled([safeLoadTasks({ silent: true }), safeLoadOverview({ silent: true }), safeLoadDockerResources({ silent: true })]);
+                showToast('镜像导入任务已提交', 'success');
+            } catch (error) {
+                showToast(`导入失败：${error.message}`, 'error');
+            }
+        });
+    });
+}
+
+async function copyTextToClipboard(text) {
+    // [2026-06-16 07:07:34] HTTP 内网页面可能禁用 Clipboard API，增加 textarea 兜底复制
+    const value = String(text || '').trim();
+    if (!value) return false;
+    if (navigator.clipboard?.writeText && window.isSecureContext) {
+        try {
+            await navigator.clipboard.writeText(value);
+            return true;
+        } catch {}
+    }
+
+    const textarea = document.createElement('textarea');
+    textarea.value = value;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    try {
+        return document.execCommand('copy');
+    } catch {
+        return false;
+    } finally {
+        textarea.remove();
+    }
+}
+
+// [2026-06-16 07:20:19] 自动复制仍失败时给出可选中文本框，避免 HTTP 内网页面只能报错
+function promptManualCopyText(text) {
+    const value = String(text || '').trim();
+    if (!value) return;
+    window.prompt('浏览器限制自动复制，请手动复制地址：', value);
+}
+
+function renderLocalResourcesView() {
+    // [2026-04-24 14:43:47] 新增本地资源导航：聚合常用内网平台入口
+    // [2026-06-16 06:59:56] 按清单回归简洁文字+按钮布局，保留数据平台入口但不再渲染卡片内额外图标
+    // [2026-06-16 07:20:19] 108 的 11221 当前拒绝连接，数据平台入口改到已探测可访问的 11201
+    const resources = [
+        {
+            name: 'GIT 服务器',
+            url: 'http://10.250.30.108:3000/',
+            desc: '代码仓库、分支管理与协作评审入口',
+        },
+        {
+            name: '数据平台',
+            url: 'http://10.250.30.108:11201/',
+            desc: '数据任务、报表与平台服务入口',
+        },
+    ];
+
+    dynamicPanel.innerHTML = `
+        ${showErrorBanner()}
+        <div class="panel" style="margin-bottom:16px;">
+            <div class="panel-head">
+                <div><h2>本地资源导航</h2><p>统一管理常用内网平台入口，点击可在新窗口打开。</p></div>
+            </div>
+        </div>
+        <div class="summary-grid">
+            ${resources.map((item) => `
+                <div class="summary-card resource-card">
+                    <div class="resource-card-head"><h3>${escapeHtml(item.name)}</h3></div>
+                    <small>${escapeHtml(item.desc)}</small>
+                    <div class="section-actions" style="margin-top:12px;">
+                        <a class="action-btn" href="${escapeHtml(item.url)}" target="_blank" rel="noopener noreferrer"><i class="fas fa-external-link-alt"></i> 打开</a>
+                        <button class="action-btn" data-action="copy-resource-url" data-url="${escapeHtml(item.url)}"><i class="fas fa-copy"></i> 复制地址</button>
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+
+    dynamicPanel.querySelectorAll('button[data-action="copy-resource-url"]').forEach((button) => {
+        button.addEventListener('click', async () => {
+            const url = button.dataset.url || '';
+            const copied = await copyTextToClipboard(url);
+            if (copied) {
+                showToast('地址已复制', 'success');
+                return;
+            }
+            promptManualCopyText(url);
+            showToast('浏览器限制自动复制，已打开手动复制框', 'info');
         });
     });
 }
@@ -841,13 +1145,23 @@ async function safeLoadTasks(options = {}) { const { silent = false } = options;
 async function safeLoadDockerResources(options = {}) { const { silent = false } = options; try { await loadDockerResources(); if (!silent) state.lastError = ''; return true; } catch (error) { if (!silent) state.lastError = error.message; return false; } }
 
 function switchView(view) {
+    // [2026-04-24 10:45:14] 保留 agent 入口可见，点击时仅提示暂未开放
+    if (view === 'agent' && !ENABLE_AGENT_VIEW) {
+        // [2026-05-21 01:55:19] 禁用入口只提示，不切换页面，避免标题与 active 状态错乱
+        showToast('智能助手入口暂未开放，当前阶段仅支持查看与运维基础能力。', 'info');
+        return;
+    }
     state.currentView = view;
     document.querySelectorAll('.nav-item').forEach((item) => item.classList.toggle('active', item.getAttribute('data-view') === view));
     setHeader(view);
-    if (view !== 'servers') stopOfflinePingLoop();
+    if (view !== 'servers') {
+        stopOfflinePingLoop();
+        stopServerDynamicRefreshLoop();
+    }
     if (view === 'servers') {
         renderServersView();
         startOfflinePingLoop();
+        startServerDynamicRefreshLoop();
         return;
     }
     if (view === 'docker') {
@@ -856,23 +1170,60 @@ function switchView(view) {
         safeLoadDockerResources({ silent: true }).then(() => renderDockerView());
         return;
     }
+    if (view === 'local-images') return renderLocalImagesView();
+    if (view === 'local-resources') return renderLocalResourcesView();
     if (view === 'artifacts') return renderArtifactsView();
     if (view === 'agent') return renderAgentView();
     return renderHomeView();
 }
 
 function bindStaticEvents() {
+    // [2026-04-24 10:45:14] 保留 agent 入口并置灰展示，避免误以为入口缺失
+    if (!ENABLE_AGENT_VIEW) {
+        const agentNav = document.querySelector('.nav-item[data-view="agent"]');
+        if (agentNav) {
+            agentNav.classList.add('is-disabled');
+            agentNav.title = '智能助手暂未开放';
+            // [2026-04-24 10:47:17] 保持主标签文字对齐，仅增加右侧状态徽标
+            if (!agentNav.querySelector('.nav-item-note')) {
+                const note = document.createElement('span');
+                note.className = 'nav-item-note';
+                note.textContent = '未开放';
+                agentNav.appendChild(note);
+            }
+        }
+    }
     document.getElementById('toggleSidebarBtn')?.addEventListener('click', () => sidebar.classList.toggle('collapsed'));
     document.querySelectorAll('.nav-item').forEach((item) => item.addEventListener('click', () => switchView(item.getAttribute('data-view'))));
+    // [2026-04-24 10:45:36] 增加 API 地址可视化与手动覆盖能力
+    document.getElementById('apiBaseBtn')?.addEventListener('click', () => {
+        const current = getApiBase();
+        const next = window.prompt('请输入 API Base（例如 http://127.0.0.1:8000/api）', current);
+        if (next === null) return;
+        const normalized = normalizeApiBase(next);
+        if (!normalized) {
+            showToast('API 地址不能为空', 'error');
+            return;
+        }
+        try {
+            new URL(normalized);
+            localStorage.setItem(API_KEY, normalized);
+            refreshApiBaseLabel();
+            showToast(`API 已更新：${normalized}`, 'success');
+            refreshAllData();
+        } catch {
+            showToast('API 地址格式无效', 'error');
+        }
+    });
     document.getElementById('helpBtn')?.addEventListener('click', async () => {
         try {
             const health = await request('/health');
-            alert(`\u5f53\u524d API\uff1a${getApiBase()}\n\u670d\u52a1\u72b6\u6001\uff1a${health.message}`);
+            showToast(`当前 API：${getApiBase()} | 服务状态：${health.message}`, 'success');
         } catch (error) {
-            alert(`\u5f53\u524d API\uff1a${getApiBase()}\n\u670d\u52a1\u8fde\u63a5\u5931\u8d25\uff1a${error.message}`);
+            showToast(`当前 API：${getApiBase()} | 服务连接失败：${error.message}`, 'error');
         }
     });
-    document.getElementById('userBtn')?.addEventListener('click', () => alert(`\u5f53\u524d\u89d2\u8272\uff1a\u7ba1\u7406\u5458\n${BUILD_TAG}`));
+    document.getElementById('userBtn')?.addEventListener('click', () => showToast(`当前角色：管理员 | ${BUILD_TAG}`, 'info'));
 }
 
 async function refreshAllData() {
@@ -885,8 +1236,10 @@ async function refreshAllData() {
 
 async function bootstrap() {
     restoreSelectedServer();
-    localStorage.setItem(API_KEY, getApiBase());
+    // [2026-05-21 01:55:19] getApiBase 自行初始化缺省值，避免启动时覆盖用户手动 API 配置
+    getApiBase();
     bindStaticEvents();
+    refreshApiBaseLabel();
     switchView('home');
     await refreshAllData();
 }

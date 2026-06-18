@@ -16,6 +16,45 @@ class ArtifactServiceError(Exception):
     pass
 
 
+class ArtifactTooLargeError(ArtifactServiceError):
+    pass
+
+
+class ArtifactUploadSession:
+    def __init__(self, *, path: Path, max_bytes: int) -> None:
+        self.path = path
+        self.max_bytes = max_bytes
+        self.size_bytes = 0
+        self._sha256 = hashlib.sha256()
+        self._file = path.open("wb")
+        self._closed = False
+
+    def append(self, chunk: bytes) -> None:
+        if self._closed or not chunk:
+            return
+        next_size = self.size_bytes + len(chunk)
+        if next_size > self.max_bytes:
+            self.close(remove_file=True)
+            raise ArtifactTooLargeError(f"上传内容过大，最大允许 {self.max_bytes} 字节")
+        self._file.write(chunk)
+        self._sha256.update(chunk)
+        self.size_bytes = next_size
+
+    def close(self, *, remove_file: bool = False) -> None:
+        if not self._closed:
+            self._file.close()
+            self._closed = True
+        if remove_file:
+            try:
+                self.path.unlink()
+            except FileNotFoundError:
+                pass
+
+    @property
+    def sha256(self) -> str:
+        return self._sha256.hexdigest()
+
+
 class ArtifactService:
     _unsafe_filename_pattern = re.compile(r'[<>:"/\\|?*\x00-\x1F]+')
 
@@ -111,6 +150,56 @@ class ArtifactService:
                 raise ArtifactServiceError("制品文件不存在")
             return path
 
+    def _reserve_artifact_locked(self, file_name: str) -> tuple[int, str, str, datetime, Path]:
+        artifact_id = self._next_id
+        normalized_name = self._sanitize_filename(file_name)
+        timestamp = datetime.now(timezone.utc)
+        stored_name = f"{artifact_id}_{timestamp.strftime('%Y%m%d%H%M%S')}_{normalized_name}"
+        path = settings.artifact_dir / stored_name
+        self._next_id += 1
+        return artifact_id, normalized_name, stored_name, timestamp, path
+
+    def begin_upload(self, *, file_name: str) -> tuple[int, str, str, datetime, ArtifactUploadSession]:
+        with self._lock:
+            artifact_id, normalized_name, stored_name, timestamp, path = self._reserve_artifact_locked(file_name)
+        return artifact_id, normalized_name, stored_name, timestamp, ArtifactUploadSession(
+            path=path,
+            max_bytes=settings.artifact_upload_max_bytes,
+        )
+
+    def finish_upload(
+        self,
+        *,
+        artifact_id: int,
+        normalized_name: str,
+        stored_name: str,
+        timestamp: datetime,
+        session: ArtifactUploadSession,
+        kind: Optional[str] = None,
+        content_type: Optional[str] = None,
+        source: Optional[str] = None,
+    ) -> Artifact:
+        session.close()
+        if session.size_bytes <= 0:
+            session.close(remove_file=True)
+            raise ArtifactServiceError("上传内容不能为空")
+
+        record = {
+            "id": artifact_id,
+            "file_name": normalized_name,
+            "stored_name": stored_name,
+            "kind": (kind or "generic").strip() or "generic",
+            "content_type": content_type or "application/octet-stream",
+            "size_bytes": session.size_bytes,
+            "sha256": session.sha256,
+            "source": source or "web-upload",
+            "created_at": timestamp,
+        }
+        with self._lock:
+            self._records.append(record)
+            self._persist_locked()
+            return self._to_public(record)
+
     def store_bytes(
         self,
         data: bytes,
@@ -120,32 +209,22 @@ class ArtifactService:
         content_type: Optional[str] = None,
         source: Optional[str] = None,
     ) -> Artifact:
-        if not data:
-            raise ArtifactServiceError("上传内容不能为空")
-
-        with self._lock:
-            artifact_id = self._next_id
-            normalized_name = self._sanitize_filename(file_name)
-            timestamp = datetime.now(timezone.utc)
-            stored_name = f"{artifact_id}_{timestamp.strftime('%Y%m%d%H%M%S')}_{normalized_name}"
-            path = settings.artifact_dir / stored_name
-            path.write_bytes(data)
-
-            record = {
-                "id": artifact_id,
-                "file_name": normalized_name,
-                "stored_name": stored_name,
-                "kind": (kind or "generic").strip() or "generic",
-                "content_type": content_type or "application/octet-stream",
-                "size_bytes": len(data),
-                "sha256": hashlib.sha256(data).hexdigest(),
-                "source": source or "web-upload",
-                "created_at": timestamp,
-            }
-            self._records.append(record)
-            self._next_id += 1
-            self._persist_locked()
-            return self._to_public(record)
+        artifact_id, normalized_name, stored_name, timestamp, session = self.begin_upload(file_name=file_name)
+        try:
+            session.append(data)
+            return self.finish_upload(
+                artifact_id=artifact_id,
+                normalized_name=normalized_name,
+                stored_name=stored_name,
+                timestamp=timestamp,
+                session=session,
+                kind=kind,
+                content_type=content_type,
+                source=source,
+            )
+        except Exception:
+            session.close(remove_file=True)
+            raise
 
     def get_stats(self) -> Dict[str, int]:
         with self._lock:

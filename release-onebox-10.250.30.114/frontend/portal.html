@@ -7,18 +7,21 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>&#32593;&#31649;&#31995;&#32479; | &#26234;&#33021;&#36816;&#32500;</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:opsz,wght@14..32,400;14..32,500;14..32,600;14..32,700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="./portal.css?v=20260417-04">
+    <!-- [2026-04-24 10:51:04] 使用本地 vendored Font Awesome，恢复原图标风格且不依赖外网 -->
+    <link rel="stylesheet" href="./vendor/font-awesome/css/all.min.css">
+    <!-- [2026-06-16 07:20:19] 更新资源版本号，清掉浏览器端本地资源导航旧缓存 -->
+    <link rel="stylesheet" href="./portal.css?v=20260616-02">
 </head>
 <body>
 <div class="app-container">
     <div class="top-bar">
         <div class="logo-area">
+            <!-- [2026-04-24 10:45:36] 恢复顶部栏原有图标结构，仅保留逻辑增强按钮 -->
             <button class="collapse-btn" id="toggleSidebarBtn" type="button"><i class="fas fa-bars"></i></button>
             <div class="logo"><h2><i class="fas fa-network-wired"></i> &#26234;&#33021;&#32593;&#31649;</h2></div>
         </div>
         <div class="user-actions">
+            <button class="icon-btn" id="apiBaseBtn" type="button"><i class="fas fa-plug"></i> <span id="apiBaseLabel">未设置</span></button>
             <button class="icon-btn" id="helpBtn" type="button"><i class="fas fa-question-circle"></i> &#24110;&#21161;</button>
             <button class="icon-btn" id="userBtn" type="button"><i class="fas fa-user-circle"></i> &#31649;&#29702;&#21592;</button>
         </div>
@@ -26,11 +29,17 @@
 
     <div class="sidebar" id="sidebar">
         <div class="nav-menu">
-            <div class="nav-item active" data-view="home"><i class="fas fa-tachometer-alt"></i><span>&#39318;&#39029;</span></div>
-            <div class="nav-item" data-view="servers"><i class="fas fa-server"></i><span>&#26381;&#21153;&#22120;&#21015;&#34920;&#65288;V1&#65289;</span></div>
-            <div class="nav-item" data-view="docker"><i class="fab fa-docker"></i><span>&#23481;&#22120;&#19982;&#38236;&#20687;&#65288;V2&#65289;</span></div>
-            <div class="nav-item" data-view="artifacts"><i class="fas fa-box-open"></i><span>&#21046;&#21697;&#24211;</span></div>
-            <div class="nav-item" data-view="agent"><i class="fas fa-robot"></i><span>&#26234;&#33021;&#21161;&#25163;&#65288;V3&#65289;</span></div>
+            <!-- [2026-05-21 01:55:19] 侧边栏导航改为 button，保留原视觉与 data-view 行为 -->
+            <button class="nav-item active" type="button" data-view="home"><i class="fas fa-tachometer-alt"></i><span>&#39318;&#39029;</span></button>
+            <!-- [2026-04-24 14:40:15] 清理 tab 版本后缀，避免文案冗余 -->
+            <button class="nav-item" type="button" data-view="servers"><i class="fas fa-server"></i><span>服务器列表</span></button>
+            <button class="nav-item" type="button" data-view="docker"><i class="fab fa-docker"></i><span>容器与镜像</span></button>
+            <!-- [2026-04-24 14:38:39] 菜单命名优化：制品库 -> 交付件管理，并新增本地镜像库 -->
+            <button class="nav-item" type="button" data-view="artifacts"><i class="fas fa-box-open"></i><span>交付件管理</span></button>
+            <button class="nav-item" type="button" data-view="local-images"><i class="fas fa-hdd"></i><span>本地镜像库</span></button>
+            <button class="nav-item" type="button" data-view="local-resources"><i class="fas fa-link"></i><span>本地资源导航</span></button>
+            <!-- [2026-04-24 14:54:51] 去掉智能助手 V3 后缀 -->
+            <button class="nav-item" type="button" data-view="agent"><i class="fas fa-robot"></i><span>智能助手</span></button>
         </div>
         <div class="side-footer">
             <i class="fas fa-shield-alt"></i>
@@ -41,12 +50,12 @@
     <div class="main-content" id="mainContent">
         <div class="view-header">
             <h1 id="viewTitle">&#26234;&#33021;&#36816;&#32500;</h1>
-            <div class="badge-version" id="versionBadge">V3 &#183; &#26234;&#33021;&#21161;&#25163;</div>
+            <div class="badge-version" id="versionBadge">智能助手</div>
         </div>
         <div id="dynamicPanel"></div>
     </div>
 </div>
 
-<script src="./portal.js?v=20260417-04"></script>
+<script src="./portal.js?v=20260616-02"></script>
 </body>
 </html>
